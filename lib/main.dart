@@ -15,7 +15,7 @@ Future<void> main() async {
   runApp(
     PdfReaderApp(
       repository: repository,
-      documentBridge: const MethodChannelDocumentBridge(),
+      documentBridge: MethodChannelDocumentBridge(),
     ),
   );
 }

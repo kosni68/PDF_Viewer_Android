@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:pdf_reader/src/app/pdf_reader_app.dart';
@@ -7,9 +9,7 @@ import 'package:pdf_reader/src/platform/document_bridge.dart';
 
 void main() {
   testWidgets('shows empty library state', (tester) async {
-    final repository = DocumentRepository(
-      store: _MemoryDocumentStore(),
-    );
+    final repository = DocumentRepository(store: _MemoryDocumentStore());
 
     await tester.pumpWidget(
       PdfReaderApp(
@@ -45,4 +45,11 @@ class _FakeDocumentBridge implements DocumentBridge {
 
   @override
   Future<PreparedPdfDocument?> preparePdfDocument(String uri) async => null;
+
+  @override
+  Future<PreparedPdfDocument?> consumePendingOpenedPdfDocument() async => null;
+
+  @override
+  Stream<PreparedPdfDocument> get openedPdfDocuments =>
+      const Stream<PreparedPdfDocument>.empty();
 }

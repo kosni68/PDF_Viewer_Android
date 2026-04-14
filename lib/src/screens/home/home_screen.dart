@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../app/app_strings.dart';
@@ -25,11 +27,23 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isLoading = true;
   bool _isOpeningDocument = false;
   bool _favoritesOnly = false;
+  StreamSubscription<PreparedPdfDocument>? _openedDocumentSubscription;
 
   @override
   void initState() {
     super.initState();
+    _openedDocumentSubscription = widget.documentBridge.openedPdfDocuments
+        .listen(_openPreparedDocument);
     _loadDocuments();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _consumePendingOpenedDocument();
+    });
+  }
+
+  @override
+  void dispose() {
+    _openedDocumentSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadDocuments() async {
@@ -56,21 +70,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      final savedDocument = await widget.repository.upsertOpenedDocument(
-        uri: preparedDocument.uri,
-        displayName: preparedDocument.displayName,
-        sizeBytes: preparedDocument.sizeBytes,
-      );
-      await _loadDocuments();
-      if (!mounted) {
-        return;
-      }
-
-      setState(() => _isOpeningDocument = false);
-      await _openReader(
-        savedDocument: savedDocument,
-        preparedDocument: preparedDocument,
-      );
+      await _openPreparedDocument(preparedDocument);
     } catch (_) {
       if (!mounted) {
         return;
@@ -101,6 +101,40 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
+      await _openPreparedDocument(preparedDocument);
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => _isOpeningDocument = false);
+      _showMessage(AppStrings.pickFailed);
+    }
+  }
+
+  Future<void> _toggleFavorite(SavedDocument document) async {
+    await widget.repository.toggleFavorite(document.uri);
+    await _loadDocuments();
+  }
+
+  Future<void> _consumePendingOpenedDocument() async {
+    final preparedDocument = await widget.documentBridge
+        .consumePendingOpenedPdfDocument();
+    if (!mounted || preparedDocument == null) {
+      return;
+    }
+
+    await _openPreparedDocument(preparedDocument);
+  }
+
+  Future<void> _openPreparedDocument(
+    PreparedPdfDocument preparedDocument,
+  ) async {
+    if (_isOpeningDocument) {
+      return;
+    }
+
+    setState(() => _isOpeningDocument = true);
+    try {
       final savedDocument = await widget.repository.upsertOpenedDocument(
         uri: preparedDocument.uri,
         displayName: preparedDocument.displayName,
@@ -123,11 +157,6 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => _isOpeningDocument = false);
       _showMessage(AppStrings.pickFailed);
     }
-  }
-
-  Future<void> _toggleFavorite(SavedDocument document) async {
-    await widget.repository.toggleFavorite(document.uri);
-    await _loadDocuments();
   }
 
   Future<void> _openReader({
@@ -153,15 +182,15 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showMessage(String message) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(content: Text(message)),
-      );
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final favorites = _documents.where((document) => document.isFavorite).toList();
+    final favorites = _documents
+        .where((document) => document.isFavorite)
+        .toList();
     final recents = _favoritesOnly
         ? _documents.where((document) => document.isFavorite).toList()
         : _documents;
@@ -347,7 +376,9 @@ class _LibraryHeroCard extends StatelessWidget {
                     )
                   : const Icon(Icons.folder_open_rounded),
               label: Text(
-                isOpeningDocument ? AppStrings.readerLoading : AppStrings.openPdf,
+                isOpeningDocument
+                    ? AppStrings.readerLoading
+                    : AppStrings.openPdf,
               ),
             ),
           ],
@@ -358,9 +389,7 @@ class _LibraryHeroCard extends StatelessWidget {
 }
 
 class _EmptyStateCard extends StatelessWidget {
-  const _EmptyStateCard({
-    required this.onOpenPdf,
-  });
+  const _EmptyStateCard({required this.onOpenPdf});
 
   final VoidCallback onOpenPdf;
 
@@ -400,10 +429,7 @@ class _EmptyStateCard extends StatelessWidget {
 }
 
 class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({
-    required this.title,
-    required this.icon,
-  });
+  const _SectionHeader({required this.title, required this.icon});
 
   final String title;
   final IconData icon;

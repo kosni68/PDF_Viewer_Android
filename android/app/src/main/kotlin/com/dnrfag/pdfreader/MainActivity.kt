@@ -14,20 +14,38 @@ import java.security.MessageDigest
 
 class MainActivity : FlutterActivity() {
     private var pendingPickerResult: MethodChannel.Result? = null
+    private var documentChannel: MethodChannel? = null
+    private var pendingOpenedDocumentPayload: Map<String, Any?>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleIncomingIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        MethodChannel(
+        val channel =
+            MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             CHANNEL_NAME,
-        ).setMethodCallHandler { call, result ->
+        )
+        documentChannel = channel
+        channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "pickPdfDocument" -> handlePickPdfDocument(result)
+                "consumePendingOpenedPdfDocument" -> {
+                    val payload = pendingOpenedDocumentPayload
+                    pendingOpenedDocumentPayload = null
+                    result.success(payload)
+                }
+
                 "preparePdfDocument" -> {
                     val uriString = call.argument<String>("uri")
                     if (uriString.isNullOrBlank()) {
@@ -40,6 +58,36 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        val payload = resolveOpenedDocumentPayload(intent) ?: return
+        pendingOpenedDocumentPayload = payload
+        documentChannel?.invokeMethod("openPdfDocument", payload)
+    }
+
+    private fun resolveOpenedDocumentPayload(intent: Intent?): Map<String, Any?>? {
+        if (intent?.action != Intent.ACTION_VIEW) {
+            return null
+        }
+
+        val uri = intent.data ?: return null
+        if (intent.type?.equals("application/pdf", ignoreCase = true) == false) {
+            return null
+        }
+
+        if (intent.flags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION != 0) {
+            runCatching {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+        }
+
+        return runCatching {
+            buildPreparedDocumentPayload(uri)
+        }.getOrNull()
     }
 
     private fun handlePickPdfDocument(result: MethodChannel.Result) {

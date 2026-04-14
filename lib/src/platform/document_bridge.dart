@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 class PreparedPdfDocument {
@@ -26,15 +28,34 @@ class PreparedPdfDocument {
 abstract interface class DocumentBridge {
   Future<PreparedPdfDocument?> pickPdfDocument();
   Future<PreparedPdfDocument?> preparePdfDocument(String uri);
+  Future<PreparedPdfDocument?> consumePendingOpenedPdfDocument();
+  Stream<PreparedPdfDocument> get openedPdfDocuments;
 }
 
 class MethodChannelDocumentBridge implements DocumentBridge {
-  const MethodChannelDocumentBridge([MethodChannel? channel])
-    : _channel = channel ?? const MethodChannel(_channelName);
+  MethodChannelDocumentBridge([MethodChannel? channel])
+    : _channel = channel ?? const MethodChannel(_channelName) {
+    _channel.setMethodCallHandler(_handleMethodCall);
+  }
 
   static const _channelName = 'com.dnrfag.pdfreader/documents';
 
   final MethodChannel _channel;
+  final StreamController<PreparedPdfDocument> _openedPdfDocumentsController =
+      StreamController<PreparedPdfDocument>.broadcast();
+
+  Future<void> _handleMethodCall(MethodCall call) async {
+    if (call.method != 'openPdfDocument') {
+      return;
+    }
+
+    final arguments = call.arguments;
+    if (arguments is! Map<dynamic, dynamic>) {
+      return;
+    }
+
+    _openedPdfDocumentsController.add(PreparedPdfDocument.fromMap(arguments));
+  }
 
   @override
   Future<PreparedPdfDocument?> pickPdfDocument() async {
@@ -58,4 +79,19 @@ class MethodChannelDocumentBridge implements DocumentBridge {
     }
     return PreparedPdfDocument.fromMap(result);
   }
+
+  @override
+  Future<PreparedPdfDocument?> consumePendingOpenedPdfDocument() async {
+    final result = await _channel.invokeMapMethod<dynamic, dynamic>(
+      'consumePendingOpenedPdfDocument',
+    );
+    if (result == null) {
+      return null;
+    }
+    return PreparedPdfDocument.fromMap(result);
+  }
+
+  @override
+  Stream<PreparedPdfDocument> get openedPdfDocuments =>
+      _openedPdfDocumentsController.stream;
 }
