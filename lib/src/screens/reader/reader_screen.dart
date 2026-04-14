@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
@@ -26,15 +27,15 @@ class ReaderScreen extends StatefulWidget {
   State<ReaderScreen> createState() => _ReaderScreenState();
 }
 
-enum _ReaderStatus {
-  loading,
-  ready,
-  notFound,
-  unreadable,
-}
+enum _ReaderStatus { loading, ready, notFound, unreadable }
 
 class _ReaderScreenState extends State<ReaderScreen> {
   static const _largeFileThreshold = 250 * 1024 * 1024;
+  static const _maxViewerScale = 4.0;
+  static const _onePassRenderingScaleThreshold = 1.5;
+  static const _onePassRenderingSizeThreshold = 1600.0;
+  static const _maxRenderedPagePixels = 4096.0;
+  static const _maxImageBytesCachedOnMemory = 160 * 1024 * 1024;
 
   late SavedDocument _document;
   late final PdfViewerController _viewerController;
@@ -226,6 +227,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
+  double _getSafeRenderingScale(PdfPage page, double estimatedScale) {
+    final maxScaleForWidth = _maxRenderedPagePixels / page.width;
+    final maxScaleForHeight = _maxRenderedPagePixels / page.height;
+    return math.min(
+      estimatedScale,
+      math.min(maxScaleForWidth, maxScaleForHeight),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final preparedDocument = _preparedDocument;
@@ -238,11 +248,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
+            Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
             if (_pageCount != null && _currentPageNumber != null)
               Text(
                 '${_currentPageNumber!} / ${_pageCount!}',
@@ -325,125 +331,140 @@ class _ReaderScreenState extends State<ReaderScreen> {
       body: switch (_status) {
         _ReaderStatus.loading => const _ReaderLoadingView(),
         _ReaderStatus.notFound => _ReaderStatusView(
-            title: AppStrings.documentNotFoundTitle,
-            body: AppStrings.documentNotFoundBody,
-            primaryLabel: AppStrings.backToLibrary,
-            onPrimaryPressed: () => Navigator.of(context).pop(),
-          ),
+          title: AppStrings.documentNotFoundTitle,
+          body: AppStrings.documentNotFoundBody,
+          primaryLabel: AppStrings.backToLibrary,
+          onPrimaryPressed: () => Navigator.of(context).pop(),
+        ),
         _ReaderStatus.unreadable => _ReaderStatusView(
-            title: AppStrings.unreadableTitle,
-            body: AppStrings.unreadableBody,
-            primaryLabel: AppStrings.retry,
-            onPrimaryPressed: _prepareDocument,
-            secondaryLabel: AppStrings.backToLibrary,
-            onSecondaryPressed: () => Navigator.of(context).pop(),
-          ),
+          title: AppStrings.unreadableTitle,
+          body: AppStrings.unreadableBody,
+          primaryLabel: AppStrings.retry,
+          onPrimaryPressed: _prepareDocument,
+          secondaryLabel: AppStrings.backToLibrary,
+          onSecondaryPressed: () => Navigator.of(context).pop(),
+        ),
         _ReaderStatus.ready when preparedDocument != null => Column(
-            children: <Widget>[
-              if ((preparedDocument.sizeBytes ?? 0) > _largeFileThreshold)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                  child: Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Row(
-                        children: <Widget>[
-                          const Icon(Icons.warning_amber_rounded),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              AppStrings.largeFileWarning,
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
+          children: <Widget>[
+            if ((preparedDocument.sizeBytes ?? 0) > _largeFileThreshold)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      children: <Widget>[
+                        const Icon(Icons.warning_amber_rounded),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            AppStrings.largeFileWarning,
+                            style: Theme.of(context).textTheme.bodySmall,
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-              Expanded(
-                child: Stack(
-                  children: <Widget>[
-                    PdfViewer.file(
-                      preparedDocument.localPath,
-                      controller: _viewerController,
-                      initialPageNumber: _document.lastPage + 1,
-                      params: PdfViewerParams(
-                        backgroundColor: Theme.of(context).colorScheme.surface,
-                        pagePaintCallbacks: <PdfViewerPagePaintCallback>[
-                          (canvas, pageRect, page) {
-                            _textSearcher?.pageTextMatchPaintCallback(
-                              canvas,
-                              pageRect,
-                              page,
-                            );
+              ),
+            Expanded(
+              child: Stack(
+                children: <Widget>[
+                  PdfViewer.file(
+                    preparedDocument.localPath,
+                    controller: _viewerController,
+                    initialPageNumber: _document.lastPage + 1,
+                    params: PdfViewerParams(
+                      backgroundColor: Theme.of(context).colorScheme.surface,
+                      maxScale: _maxViewerScale,
+                      onePassRenderingScaleThreshold:
+                          _onePassRenderingScaleThreshold,
+                      onePassRenderingSizeThreshold:
+                          _onePassRenderingSizeThreshold,
+                      maxImageBytesCachedOnMemory: _maxImageBytesCachedOnMemory,
+                      limitRenderingCache: false,
+                      getPageRenderingScale:
+                          (context, page, controller, estimatedScale) {
+                            return _getSafeRenderingScale(page, estimatedScale);
                           },
-                        ],
-                        onViewerReady: (document, controller) {
-                          _onViewerReady(document);
-                        },
-                        onPageChanged: _onPageChanged,
-                        onDocumentLoadFinished: (documentRef, loadSucceeded) {
-                          if (!loadSucceeded && mounted) {
-                            setState(() => _status = _ReaderStatus.unreadable);
-                          }
-                        },
-                        loadingBannerBuilder: (context, bytesDownloaded, totalBytes) {
-                          return const Center(
-                            child: CircularProgressIndicator(),
+                      onInteractionEnd: (_) {
+                        if (_viewerController.isReady) {
+                          _viewerController.invalidate();
+                        }
+                      },
+                      pagePaintCallbacks: <PdfViewerPagePaintCallback>[
+                        (canvas, pageRect, page) {
+                          _textSearcher?.pageTextMatchPaintCallback(
+                            canvas,
+                            pageRect,
+                            page,
                           );
                         },
-                        errorBannerBuilder: (context, error, stackTrace, documentRef) {
-                          return const SizedBox.shrink();
-                        },
-                        viewerOverlayBuilder: (context, size, handleLinkTap) {
-                          return <Widget>[
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: PdfViewerScrollThumb(
-                                controller: _viewerController,
-                                orientation: ScrollbarOrientation.right,
-                              ),
-                            ),
-                          ];
-                        },
-                      ),
+                      ],
+                      onViewerReady: (document, controller) {
+                        _onViewerReady(document);
+                      },
+                      onPageChanged: _onPageChanged,
+                      onDocumentLoadFinished: (documentRef, loadSucceeded) {
+                        if (!loadSucceeded && mounted) {
+                          setState(() => _status = _ReaderStatus.unreadable);
+                        }
+                      },
+                      loadingBannerBuilder:
+                          (context, bytesDownloaded, totalBytes) {
+                            return const Center(
+                              child: CircularProgressIndicator(),
+                            );
+                          },
+                      errorBannerBuilder:
+                          (context, error, stackTrace, documentRef) {
+                            return const SizedBox.shrink();
+                          },
+                      viewerOverlayBuilder: (context, size, handleLinkTap) {
+                        return <Widget>[
+                          PdfViewerScrollThumb(
+                            controller: _viewerController,
+                            orientation: ScrollbarOrientation.right,
+                          ),
+                        ];
+                      },
                     ),
-                    Positioned(
-                      left: 16,
-                      right: 16,
-                      bottom: 16,
-                      child: IgnorePointer(
-                        child: Center(
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.68),
-                              borderRadius: BorderRadius.circular(18),
+                  ),
+                  Positioned(
+                    left: 16,
+                    right: 16,
+                    bottom: 16,
+                    child: IgnorePointer(
+                      child: Center(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.68),
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 10,
                             ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 10,
-                              ),
-                              child: Text(
-                                _pageCount != null && _currentPageNumber != null
-                                    ? '${_currentPageNumber!} / ${_pageCount!}'
-                                    : AppStrings.readerLoading,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                ),
+                            child: Text(
+                              _pageCount != null && _currentPageNumber != null
+                                  ? '${_currentPageNumber!} / ${_pageCount!}'
+                                  : AppStrings.readerLoading,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
                               ),
                             ),
                           ),
                         ),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
+        ),
         _ => const SizedBox.shrink(),
       },
     );
@@ -542,7 +563,8 @@ class _ReaderStatusView extends StatelessWidget {
                       : () async => onPrimaryPressed!.call(),
                   child: Text(primaryLabel),
                 ),
-                if (secondaryLabel != null && onSecondaryPressed != null) ...<Widget>[
+                if (secondaryLabel != null &&
+                    onSecondaryPressed != null) ...<Widget>[
                   const SizedBox(height: 10),
                   OutlinedButton(
                     onPressed: onSecondaryPressed,
