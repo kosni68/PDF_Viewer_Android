@@ -1,0 +1,2 @@
+C:/Users/dnrfag/Documents/pdf_reader/vendor/pdfium_flutter/android/.cxx/Debug/34633x3i/arm64-v8a/CMakeFiles/edit_cache.dir
+C:/Users/dnrfag/Documents/pdf_reader/vendor/pdfium_flutter/android/.cxx/Debug/34633x3i/arm64-v8a/CMakeFiles/rebuild_cache.dir
