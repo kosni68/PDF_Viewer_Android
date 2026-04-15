@@ -60,6 +60,9 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
       const SignatureCaptureService();
   final TransformationController _transformationController =
       TransformationController();
+  final TextEditingController _textInspectorController =
+      TextEditingController();
+  final FocusNode _textInspectorFocusNode = FocusNode();
 
   PdfDocument? _pdfDocument;
   ui.Image? _pageImage;
@@ -78,6 +81,9 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
   int _historyIndex = 0;
   String? _selectedObjectId;
   bool _isChromeCollapsed = true;
+  String? _textInspectorSyncedObjectId;
+  bool _isSyncingTextInspector = false;
+  bool _hasPendingTextInspectorCommit = false;
 
   _EditorTool _activeTool = _EditorTool.select;
   ShapeKind _selectedShapeKind = ShapeKind.rectangle;
@@ -103,6 +109,8 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
   void initState() {
     super.initState();
     _currentPageNumber = widget.savedDocument.lastPage + 1;
+    _textInspectorController.addListener(_handleTextInspectorChanged);
+    _textInspectorFocusNode.addListener(_handleTextInspectorFocusChanged);
     _loadDocument();
   }
 
@@ -110,6 +118,12 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
   void dispose() {
     _pageImage?.dispose();
     unawaited(_pdfDocument?.dispose());
+    _textInspectorController
+      ..removeListener(_handleTextInspectorChanged)
+      ..dispose();
+    _textInspectorFocusNode
+      ..removeListener(_handleTextInspectorFocusChanged)
+      ..dispose();
     _transformationController.dispose();
     super.dispose();
   }
@@ -204,6 +218,7 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
       _clearDrafts();
     });
     previousImage?.dispose();
+    _syncTextInspectorWithSelection();
     _transformationController.value = Matrix4.identity();
   }
 
@@ -213,11 +228,13 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
         pageNumber == _currentPageNumber) {
       return;
     }
+    _flushPendingTextInspectorChanges();
     setState(() {
       _currentPageNumber = pageNumber;
       _selectedObjectId = null;
       _clearDrafts();
     });
+    _syncTextInspectorWithSelection();
     await _renderCurrentPage();
   }
 
@@ -234,7 +251,85 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  void _handleTextInspectorChanged() {
+    if (_isSyncingTextInspector) {
+      return;
+    }
+
+    final selectedObject = _selectedObject;
+    if (selectedObject is! TextEditObject) {
+      return;
+    }
+
+    final nextText = _textInspectorController.text;
+    if (selectedObject.text == nextText) {
+      return;
+    }
+
+    _hasPendingTextInspectorCommit = true;
+    _previewState(
+      _state.upsertObject(selectedObject.copyWith(text: nextText)),
+      selectedObjectId: selectedObject.id,
+    );
+  }
+
+  void _handleTextInspectorFocusChanged() {
+    if (_textInspectorFocusNode.hasFocus) {
+      return;
+    }
+    _flushPendingTextInspectorChanges();
+  }
+
+  void _syncTextInspectorWithSelection() {
+    final selectedObject = _selectedObject;
+    if (selectedObject is! TextEditObject) {
+      if (_textInspectorSyncedObjectId != null ||
+          _textInspectorController.text.isNotEmpty) {
+        _isSyncingTextInspector = true;
+        _textInspectorController.clear();
+        _isSyncingTextInspector = false;
+      }
+      _textInspectorSyncedObjectId = null;
+      return;
+    }
+
+    if (_textInspectorSyncedObjectId == selectedObject.id &&
+        _textInspectorController.text == selectedObject.text) {
+      return;
+    }
+
+    _isSyncingTextInspector = true;
+    _textInspectorController.value = TextEditingValue(
+      text: selectedObject.text,
+      selection: TextSelection.collapsed(offset: selectedObject.text.length),
+    );
+    _isSyncingTextInspector = false;
+    _textInspectorSyncedObjectId = selectedObject.id;
+  }
+
+  void _scheduleTextInspectorFocus() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _textInspectorFocusNode.requestFocus();
+    });
+  }
+
+  void _flushPendingTextInspectorChanges() {
+    if (!_hasPendingTextInspectorCommit) {
+      return;
+    }
+    _hasPendingTextInspectorCommit = false;
+    _commitCurrentState(selectedObjectId: _selectedObjectId);
+  }
+
   void _toggleChromeVisibility() {
+    if (_isChromeCollapsed) {
+      _syncTextInspectorWithSelection();
+    } else {
+      _flushPendingTextInspectorChanges();
+    }
     setState(() {
       _isChromeCollapsed = !_isChromeCollapsed;
     });
@@ -263,6 +358,7 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
   }
 
   void _setActiveTool(_EditorTool tool) {
+    _flushPendingTextInspectorChanges();
     setState(() {
       _activeTool = tool;
       if (tool != _EditorTool.select) {
@@ -270,13 +366,16 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
       }
       _clearDrafts();
     });
+    _syncTextInspectorWithSelection();
   }
 
   void _selectObject(String? objectId) {
+    _flushPendingTextInspectorChanges();
     setState(() {
       _selectedObjectId = objectId;
       _activeTool = _EditorTool.select;
     });
+    _syncTextInspectorWithSelection();
   }
 
   void _previewState(EditorDocumentState next, {String? selectedObjectId}) {
@@ -303,6 +402,7 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
         _selectedObjectId = null;
       }
     });
+    _syncTextInspectorWithSelection();
   }
 
   void _applyAndCommit(EditorDocumentState next, {String? selectedObjectId}) {
@@ -319,6 +419,7 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     if (_historyIndex == 0) {
       return;
     }
+    _flushPendingTextInspectorChanges();
     setState(() {
       _historyIndex -= 1;
       _state = _history[_historyIndex];
@@ -327,12 +428,14 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
         _selectedObjectId = null;
       }
     });
+    _syncTextInspectorWithSelection();
   }
 
   void _redo() {
     if (_historyIndex >= _history.length - 1) {
       return;
     }
+    _flushPendingTextInspectorChanges();
     setState(() {
       _historyIndex += 1;
       _state = _history[_historyIndex];
@@ -341,6 +444,7 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
         _selectedObjectId = null;
       }
     });
+    _syncTextInspectorWithSelection();
   }
 
   Offset _toNormalized(Offset localPosition, Size canvasSize) {
@@ -458,15 +562,11 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
             rect.height < _minObjectExtent) {
           return;
         }
-        final text = await _promptReplacementText();
-        if (!mounted || text == null || text.trim().isEmpty) {
-          return;
-        }
         final object = TextEditObject(
           id: _newObjectId('text'),
           pageNumber: _currentPageNumber,
           normalizedRect: _clampRect(rect),
-          text: text.trim(),
+          text: '',
           style: _draftTextStyle,
           opacity: _draftTextOpacity,
         );
@@ -474,6 +574,15 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
           _state.upsertObject(object),
           selectedObjectId: object.id,
         );
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _activeTool = _EditorTool.select;
+          _isChromeCollapsed = false;
+        });
+        _syncTextInspectorWithSelection();
+        _scheduleTextInspectorFocus();
       case _EditorTool.shape:
         final rect = _draftShapeRect;
         setState(_clearDrafts);
@@ -840,17 +949,13 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
       return;
     }
 
-    final updatedText = await _promptReplacementText(
-      initialText: selectedObject.text,
-    );
-    if (!mounted || updatedText == null || updatedText.trim().isEmpty) {
-      return;
+    if (_isChromeCollapsed) {
+      setState(() {
+        _isChromeCollapsed = false;
+      });
     }
-
-    _applyAndCommit(
-      _state.upsertObject(selectedObject.copyWith(text: updatedText.trim())),
-      selectedObjectId: selectedObject.id,
-    );
+    _syncTextInspectorWithSelection();
+    _scheduleTextInspectorFocus();
   }
 
   Future<void> _insertSignature() async {
@@ -921,21 +1026,11 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     return _buildCenteredRect(width: width, height: height);
   }
 
-  Future<String?> _promptReplacementText({String initialText = ''}) {
-    return showModalBottomSheet<String>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      builder: (context) {
-        return _ReplacementTextSheet(initialText: initialText);
-      },
-    );
-  }
-
   Future<void> _saveEditedCopy() async {
     if (_isSaving) {
       return;
     }
+    _flushPendingTextInspectorChanges();
 
     setState(() => _isSaving = true);
     final tempPath = p.join(
@@ -1439,7 +1534,7 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     switch (object) {
       case TextEditObject():
         final fontSize = math.max(
-          12.0,
+          EditorStyleCatalog.minTextFontSize,
           objectSize.height * object.style.fontSizeScale,
         );
         return Transform.rotate(
@@ -1651,6 +1746,7 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     final style = selectedObject?.style ?? _draftTextStyle;
     final opacity = selectedObject?.opacity ?? _draftTextOpacity;
     final transparentBackground = style.backgroundColor == null;
+    final hasSelectedObject = selectedObject != null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1660,6 +1756,32 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
           style: Theme.of(
             context,
           ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _textInspectorController,
+          focusNode: _textInspectorFocusNode,
+          enabled: hasSelectedObject,
+          minLines: 3,
+          maxLines: 6,
+          textInputAction: TextInputAction.newline,
+          decoration: InputDecoration(
+            labelText: 'Contenu',
+            alignLabelWithHint: true,
+            hintText: hasSelectedObject
+                ? 'Saisir le texte'
+                : 'Dessinez une zone texte pour commencer',
+            border: const OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          hasSelectedObject
+              ? 'Le texte est applique en direct sur la zone selectionnee.'
+              : 'Dessinez une zone texte sur la page puis saisissez son contenu ici.',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ),
         const SizedBox(height: 12),
         DropdownButtonFormField<String>(
@@ -1777,9 +1899,9 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
             _LabeledSlider(
               label: 'Echelle police',
               value: style.fontSizeScale,
-              min: 0.2,
+              min: 0.06,
               max: 0.9,
-              divisions: 28,
+              divisions: 42,
               onChanged: (value) {
                 _updateTextStyle(
                   (current) => current.copyWith(fontSizeScale: value),
@@ -2407,93 +2529,5 @@ class _DraftCanvasPainter extends CustomPainter {
         oldDelegate.draftStrokePoints != draftStrokePoints ||
         oldDelegate.draftStrokeStyle != draftStrokeStyle ||
         oldDelegate.draftStrokeOpacity != draftStrokeOpacity;
-  }
-}
-
-class _ReplacementTextSheet extends StatefulWidget {
-  const _ReplacementTextSheet({required this.initialText});
-
-  final String initialText;
-
-  @override
-  State<_ReplacementTextSheet> createState() => _ReplacementTextSheetState();
-}
-
-class _ReplacementTextSheetState extends State<_ReplacementTextSheet> {
-  late final TextEditingController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(text: widget.initialText);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 180),
-      padding: EdgeInsets.only(
-        left: 20,
-        right: 20,
-        top: 20,
-        bottom: 20 + MediaQuery.viewInsetsOf(context).bottom,
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                'Remplacer du texte',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Saisissez le nouveau texte a poser sur la zone.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _controller,
-                autofocus: true,
-                minLines: 3,
-                maxLines: 8,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  hintText: 'Nouveau texte',
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: <Widget>[
-                  OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Annuler'),
-                  ),
-                  const Spacer(),
-                  FilledButton(
-                    onPressed: () =>
-                        Navigator.of(context).pop(_controller.text),
-                    child: const Text('Inserer'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }

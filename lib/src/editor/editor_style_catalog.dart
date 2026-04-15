@@ -32,8 +32,20 @@ abstract final class EditorStyleCatalog {
     Color(0xFFD84315),
   ];
 
-  static const textSizes = <double>[0.28, 0.36, 0.46, 0.58, 0.7];
+  static const textSizes = <double>[
+    0.06,
+    0.08,
+    0.1,
+    0.12,
+    0.18,
+    0.24,
+    0.32,
+    0.46,
+    0.58,
+    0.7,
+  ];
   static const strokeSizes = <double>[0.003, 0.006, 0.01, 0.016, 0.024];
+  static const minTextFontSize = 6.0;
 
   static const defaultTextStyle = TextReplacementStyle(
     fontFamily: 'NotoSans',

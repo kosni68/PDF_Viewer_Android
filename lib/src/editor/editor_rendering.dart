@@ -143,7 +143,10 @@ void paintTextObject(Canvas canvas, TextEditObject object, Rect rect) {
   );
   final textStyle = buildEditorTextStyle(
     object.style,
-    fontSize: math.max(12, rect.height * object.style.fontSizeScale),
+    fontSize: math.max(
+      EditorStyleCatalog.minTextFontSize,
+      rect.height * object.style.fontSizeScale,
+    ),
     opacity: object.opacity,
   );
 
