@@ -30,6 +30,11 @@ abstract interface class DocumentBridge {
   Future<PreparedPdfDocument?> preparePdfDocument(String uri);
   Future<PreparedPdfDocument?> consumePendingOpenedPdfDocument();
   Stream<PreparedPdfDocument> get openedPdfDocuments;
+  Future<void> sharePdfDocument({
+    required String uri,
+    required String localPath,
+    required String displayName,
+  });
 }
 
 class MethodChannelDocumentBridge implements DocumentBridge {
@@ -94,4 +99,17 @@ class MethodChannelDocumentBridge implements DocumentBridge {
   @override
   Stream<PreparedPdfDocument> get openedPdfDocuments =>
       _openedPdfDocumentsController.stream;
+
+  @override
+  Future<void> sharePdfDocument({
+    required String uri,
+    required String localPath,
+    required String displayName,
+  }) {
+    return _channel.invokeMethod<void>('sharePdfDocument', <String, Object?>{
+      'uri': uri,
+      'localPath': localPath,
+      'displayName': displayName,
+    });
+  }
 }

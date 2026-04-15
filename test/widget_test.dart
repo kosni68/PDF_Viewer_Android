@@ -52,4 +52,11 @@ class _FakeDocumentBridge implements DocumentBridge {
   @override
   Stream<PreparedPdfDocument> get openedPdfDocuments =>
       const Stream<PreparedPdfDocument>.empty();
+
+  @override
+  Future<void> sharePdfDocument({
+    required String uri,
+    required String localPath,
+    required String displayName,
+  }) async {}
 }

@@ -129,10 +129,6 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openPreparedDocument(
     PreparedPdfDocument preparedDocument,
   ) async {
-    if (_isOpeningDocument) {
-      return;
-    }
-
     setState(() => _isOpeningDocument = true);
     try {
       final savedDocument = await widget.repository.upsertOpenedDocument(

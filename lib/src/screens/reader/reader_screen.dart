@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import '../../app/app_strings.dart';
@@ -48,6 +49,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   int? _currentPageNumber;
   int? _pageCount;
   bool _showSearch = false;
+  bool _isSharingDocument = false;
   bool _viewerReady = false;
 
   @override
@@ -145,6 +147,33 @@ class _ReaderScreenState extends State<ReaderScreen> {
     });
   }
 
+  Future<void> _shareDocument() async {
+    final preparedDocument = _preparedDocument;
+    if (_status != _ReaderStatus.ready ||
+        preparedDocument == null ||
+        _isSharingDocument) {
+      return;
+    }
+
+    setState(() => _isSharingDocument = true);
+
+    try {
+      await widget.documentBridge.sharePdfDocument(
+        uri: preparedDocument.uri,
+        localPath: preparedDocument.localPath,
+        displayName: preparedDocument.displayName,
+      );
+    } on PlatformException {
+      _showMessage(AppStrings.shareFailed);
+    } catch (_) {
+      _showMessage(AppStrings.shareFailed);
+    } finally {
+      if (mounted) {
+        setState(() => _isSharingDocument = false);
+      }
+    }
+  }
+
   Future<void> _onViewerReady(PdfDocument document) async {
     final pageCount = document.pages.length;
     _ensureTextSearcherInitialized();
@@ -236,6 +265,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final preparedDocument = _preparedDocument;
@@ -257,6 +292,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
           ],
         ),
         actions: <Widget>[
+          if (_status == _ReaderStatus.ready && preparedDocument != null)
+            IconButton(
+              onPressed: _isSharingDocument ? null : _shareDocument,
+              tooltip: AppStrings.sharePdf,
+              icon: const Icon(Icons.share_rounded),
+            ),
           if (_status == _ReaderStatus.ready && _viewerReady)
             IconButton(
               onPressed: _toggleSearch,

@@ -1,9 +1,12 @@
 package com.dnrfag.pdfreader
 
+import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -44,6 +47,25 @@ class MainActivity : FlutterActivity() {
                     val payload = pendingOpenedDocumentPayload
                     pendingOpenedDocumentPayload = null
                     result.success(payload)
+                }
+                "sharePdfDocument" -> {
+                    val uriString = call.argument<String>("uri")
+                    val localPath = call.argument<String>("localPath")
+                    val displayName = call.argument<String>("displayName")
+                    if (uriString.isNullOrBlank() ||
+                        localPath.isNullOrBlank() ||
+                        displayName.isNullOrBlank()
+                    ) {
+                        result.error("invalid_argument", "Les informations de partage sont incomplètes.", null)
+                        return@setMethodCallHandler
+                    }
+
+                    sharePdfDocument(
+                        uri = Uri.parse(uriString),
+                        localPath = localPath,
+                        displayName = displayName,
+                        result = result,
+                    )
                 }
 
                 "preparePdfDocument" -> {
@@ -162,6 +184,87 @@ class MainActivity : FlutterActivity() {
                 )
             }
         }
+    }
+
+    private fun sharePdfDocument(
+        uri: Uri,
+        localPath: String,
+        displayName: String,
+        result: MethodChannel.Result,
+    ) {
+        runCatching {
+            val shareUri = resolveShareUri(uri, localPath)
+            val shareIntent =
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "application/pdf"
+                    putExtra(Intent.EXTRA_STREAM, shareUri)
+                    clipData = ClipData.newUri(contentResolver, displayName, shareUri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            val chooser =
+                Intent.createChooser(shareIntent, "Partager le PDF").apply {
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            startActivity(chooser)
+        }.onSuccess {
+            result.success(null)
+        }.onFailure { error ->
+            when (error) {
+                is ActivityNotFoundException,
+                is FileNotFoundException,
+                is SecurityException,
+                is IllegalArgumentException -> result.error(
+                    "share_failed",
+                    error.message ?: "Impossible de partager le document.",
+                    null,
+                )
+
+                else -> result.error(
+                    "share_failed",
+                    error.message,
+                    null,
+                )
+            }
+        }
+    }
+
+    private fun resolveShareUri(uri: Uri, localPath: String): Uri {
+        resolveShareableSourceUri(uri)?.let { shareableUri ->
+            return shareableUri
+        }
+        return buildLocalShareUri(localPath)
+    }
+
+    private fun resolveShareableSourceUri(uri: Uri): Uri? {
+        if (uri.scheme != "content") {
+            return null
+        }
+
+        val canRead =
+            runCatching {
+                contentResolver.openInputStream(uri)?.use { true } == true
+            }.getOrDefault(false)
+
+        return if (canRead) uri else null
+    }
+
+    private fun buildLocalShareUri(localPath: String): Uri {
+        val allowedDirectory = File(filesDir, "pdf_documents").canonicalFile
+        val file = File(localPath).canonicalFile
+        val allowedPrefix = "${allowedDirectory.path}${File.separator}"
+
+        if (!file.exists()) {
+            throw FileNotFoundException("Le fichier PDF local n'existe plus.")
+        }
+        if (!file.path.startsWith(allowedPrefix)) {
+            throw SecurityException("Le fichier a partager n'est pas dans le repertoire autorise.")
+        }
+
+        return FileProvider.getUriForFile(
+            this,
+            "${applicationContext.packageName}.fileprovider",
+            file,
+        )
     }
 
     private fun buildPreparedDocumentPayload(uri: Uri): Map<String, Any?>? {
