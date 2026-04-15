@@ -52,6 +52,12 @@ enum _EditorTool { select, text, pen, highlighter, eraser, shape }
 class _PdfEditorScreenState extends State<PdfEditorScreen> {
   static const double _maxPreviewEdge = 1800;
   static const double _minObjectExtent = 0.04;
+  static const double _minTextObjectExtent = 0.01;
+  static const double _defaultTextWidth = 0.12;
+  static const double _defaultTextHeight = 0.028;
+  static const double _minAutoTextWidthFactor = 0.045;
+  static const double _maxAutoTextWidthFactor = 0.72;
+  static const double _minAutoTextHeightFactor = 0.018;
 
   final PdfFlattenExportService _exportService =
       const PdfFlattenExportService();
@@ -266,10 +272,13 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
       return;
     }
 
+    final updatedObject = _autoSizeTextObject(
+      selectedObject.copyWith(text: nextText),
+    );
     _hasPendingTextInspectorCommit = true;
     _previewState(
-      _state.upsertObject(selectedObject.copyWith(text: nextText)),
-      selectedObjectId: selectedObject.id,
+      _state.upsertObject(updatedObject),
+      selectedObjectId: updatedObject.id,
     );
   }
 
@@ -464,9 +473,9 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     return Rect.fromLTRB(left, top, right, bottom);
   }
 
-  Rect _clampRect(Rect rect) {
-    final safeWidth = rect.width.clamp(_minObjectExtent, 1.0).toDouble();
-    final safeHeight = rect.height.clamp(_minObjectExtent, 1.0).toDouble();
+  Rect _clampRect(Rect rect, {double minExtent = _minObjectExtent}) {
+    final safeWidth = rect.width.clamp(minExtent, 1.0).toDouble();
+    final safeHeight = rect.height.clamp(minExtent, 1.0).toDouble();
     final left = rect.left.clamp(0.0, 1.0 - safeWidth).toDouble();
     final top = rect.top.clamp(0.0, 1.0 - safeHeight).toDouble();
     return Rect.fromLTWH(left, top, safeWidth, safeHeight);
@@ -489,6 +498,60 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
       rect.top * canvasSize.height,
       rect.width * canvasSize.width,
       rect.height * canvasSize.height,
+    );
+  }
+
+  Size? get _currentPagePixelSize {
+    final pageImage = _pageImage;
+    if (pageImage == null) {
+      return null;
+    }
+    return Size(pageImage.width.toDouble(), pageImage.height.toDouble());
+  }
+
+  Rect _seedTextRect(Rect draftRect) {
+    return _clampRect(
+      Rect.fromLTWH(
+        draftRect.left,
+        draftRect.top,
+        math.max(draftRect.width, _defaultTextWidth),
+        math.max(draftRect.height, _defaultTextHeight),
+      ),
+      minExtent: _minTextObjectExtent,
+    );
+  }
+
+  TextEditObject _autoSizeTextObject(TextEditObject object) {
+    final pageSize = _currentPagePixelSize;
+    if (pageSize == null || pageSize.width <= 0 || pageSize.height <= 0) {
+      return object;
+    }
+
+    final currentRect = _normalizedToCanvasRect(
+      object.normalizedRect,
+      pageSize,
+    );
+    final measurementRectSize = Size(
+      math.max(currentRect.width, pageSize.width * _defaultTextWidth),
+      math.max(currentRect.height, pageSize.height * _defaultTextHeight),
+    );
+    final measuredSize = measureTextObjectSize(
+      object,
+      rectSize: measurementRectSize,
+      maxBoxWidth: pageSize.width * _maxAutoTextWidthFactor,
+    );
+    final resizedRect = Rect.fromLTWH(
+      object.normalizedRect.left,
+      object.normalizedRect.top,
+      (measuredSize.width / pageSize.width)
+          .clamp(_minAutoTextWidthFactor, _maxAutoTextWidthFactor)
+          .toDouble(),
+      (measuredSize.height / pageSize.height)
+          .clamp(_minAutoTextHeightFactor, 0.9)
+          .toDouble(),
+    );
+    return object.copyWith(
+      normalizedRect: _clampRect(resizedRect, minExtent: _minTextObjectExtent),
     );
   }
 
@@ -557,18 +620,18 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
       case _EditorTool.text:
         final rect = _draftTextRect;
         setState(_clearDrafts);
-        if (rect == null ||
-            rect.width < _minObjectExtent ||
-            rect.height < _minObjectExtent) {
+        if (rect == null) {
           return;
         }
-        final object = TextEditObject(
-          id: _newObjectId('text'),
-          pageNumber: _currentPageNumber,
-          normalizedRect: _clampRect(rect),
-          text: '',
-          style: _draftTextStyle,
-          opacity: _draftTextOpacity,
+        final object = _autoSizeTextObject(
+          TextEditObject(
+            id: _newObjectId('text'),
+            pageNumber: _currentPageNumber,
+            normalizedRect: _seedTextRect(rect),
+            text: '',
+            style: _draftTextStyle,
+            opacity: _draftTextOpacity,
+          ),
         );
         _applyAndCommit(
           _state.upsertObject(object),
@@ -689,17 +752,25 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     }
 
     final rect = object.normalizedRect;
+    final minExtent = object is TextEditObject
+        ? _minTextObjectExtent
+        : _minObjectExtent;
     final width = (rect.width + delta.dx)
-        .clamp(_minObjectExtent, 1.0 - rect.left)
+        .clamp(minExtent, 1.0 - rect.left)
         .toDouble();
     final height = (rect.height + delta.dy)
-        .clamp(_minObjectExtent, 1.0 - rect.top)
+        .clamp(minExtent, 1.0 - rect.top)
         .toDouble();
     final resizedRect = Rect.fromLTWH(rect.left, rect.top, width, height);
 
     return switch (object) {
       TextEditObject() => state.upsertObject(
-        object.copyWith(normalizedRect: _clampRect(resizedRect)),
+        object.copyWith(
+          normalizedRect: _clampRect(
+            resizedRect,
+            minExtent: _minTextObjectExtent,
+          ),
+        ),
       ),
       ImageEditObject() => state.upsertObject(
         object.copyWith(normalizedRect: _clampRect(resizedRect)),
@@ -823,11 +894,12 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
   ) {
     final selectedObject = _selectedObject;
     if (selectedObject is TextEditObject) {
+      final updatedObject = _autoSizeTextObject(
+        selectedObject.copyWith(style: transform(selectedObject.style)),
+      );
       _applyAndCommit(
-        _state.upsertObject(
-          selectedObject.copyWith(style: transform(selectedObject.style)),
-        ),
-        selectedObjectId: selectedObject.id,
+        _state.upsertObject(updatedObject),
+        selectedObjectId: updatedObject.id,
       );
       return;
     }
@@ -1533,10 +1605,7 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
   ) {
     switch (object) {
       case TextEditObject():
-        final fontSize = math.max(
-          EditorStyleCatalog.minTextFontSize,
-          objectSize.height * object.style.fontSizeScale,
-        );
+        final fontSize = textObjectFontSize(object, objectSize);
         return Transform.rotate(
           angle: object.rotationDegrees * math.pi / 180,
           child: ClipRect(
@@ -1547,13 +1616,7 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
                       object.style.backgroundColor!,
                       object.opacity,
                     ),
-              padding: EdgeInsets.all(
-                math.max(
-                  6,
-                  math.min(objectSize.width, objectSize.height) *
-                      object.style.paddingFactor,
-                ),
-              ),
+              padding: EdgeInsets.all(textObjectPadding(object, objectSize)),
               alignment: Alignment.topLeft,
               child: Text(
                 object.text,
@@ -1777,8 +1840,8 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
         const SizedBox(height: 8),
         Text(
           hasSelectedObject
-              ? 'Le texte est applique en direct sur la zone selectionnee.'
-              : 'Dessinez une zone texte sur la page puis saisissez son contenu ici.',
+              ? 'Le texte est applique en direct et la zone s ajuste automatiquement.'
+              : 'Touchez ou tracez une zone texte sur la page, puis saisissez son contenu ici.',
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
@@ -1899,9 +1962,9 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
             _LabeledSlider(
               label: 'Echelle police',
               value: style.fontSizeScale,
-              min: 0.06,
+              min: 0.03,
               max: 0.9,
-              divisions: 42,
+              divisions: 58,
               onChanged: (value) {
                 _updateTextStyle(
                   (current) => current.copyWith(fontSizeScale: value),

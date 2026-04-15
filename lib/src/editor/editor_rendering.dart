@@ -35,6 +35,53 @@ TextStyle buildEditorTextStyle(
   );
 }
 
+double textObjectFontSize(TextEditObject object, Size rectSize) {
+  return math.max(
+    EditorStyleCatalog.minTextFontSize,
+    rectSize.height * object.style.fontSizeScale,
+  );
+}
+
+double textObjectPadding(TextEditObject object, Size rectSize) {
+  return math.max(
+    EditorStyleCatalog.minTextPadding,
+    math.min(rectSize.width, rectSize.height) * object.style.paddingFactor,
+  );
+}
+
+Size measureTextObjectSize(
+  TextEditObject object, {
+  required Size rectSize,
+  required double maxBoxWidth,
+}) {
+  final padding = textObjectPadding(object, rectSize);
+  final textStyle = buildEditorTextStyle(
+    object.style,
+    fontSize: textObjectFontSize(object, rectSize),
+    opacity: object.opacity,
+  );
+  final textPainter = TextPainter(
+    text: TextSpan(
+      text: object.text.isEmpty ? ' ' : object.text,
+      style: textStyle,
+    ),
+    textDirection: TextDirection.ltr,
+    maxLines: null,
+  )..layout(maxWidth: math.max(16, maxBoxWidth - (padding * 2)));
+
+  return Size(
+    (textPainter.width + (padding * 2))
+        .clamp(EditorStyleCatalog.minTextFontSize + (padding * 2), maxBoxWidth)
+        .toDouble(),
+    math
+        .max(
+          textPainter.height + (padding * 2),
+          textObjectFontSize(object, rectSize) + (padding * 2),
+        )
+        .toDouble(),
+  );
+}
+
 void paintStrokeObject(
   Canvas canvas,
   StrokeEditObject object,
@@ -137,16 +184,11 @@ void paintShapeObject(
 }
 
 void paintTextObject(Canvas canvas, TextEditObject object, Rect rect) {
-  final padding = math.max(
-    6.0,
-    math.min(rect.width, rect.height) * object.style.paddingFactor,
-  );
+  final rectSize = rect.size;
+  final padding = textObjectPadding(object, rectSize);
   final textStyle = buildEditorTextStyle(
     object.style,
-    fontSize: math.max(
-      EditorStyleCatalog.minTextFontSize,
-      rect.height * object.style.fontSizeScale,
-    ),
+    fontSize: textObjectFontSize(object, rectSize),
     opacity: object.opacity,
   );
 

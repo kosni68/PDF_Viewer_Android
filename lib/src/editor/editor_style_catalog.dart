@@ -33,6 +33,9 @@ abstract final class EditorStyleCatalog {
   ];
 
   static const textSizes = <double>[
+    0.03,
+    0.04,
+    0.05,
     0.06,
     0.08,
     0.1,
@@ -45,7 +48,8 @@ abstract final class EditorStyleCatalog {
     0.7,
   ];
   static const strokeSizes = <double>[0.003, 0.006, 0.01, 0.016, 0.024];
-  static const minTextFontSize = 6.0;
+  static const minTextFontSize = 4.0;
+  static const minTextPadding = 3.0;
 
   static const defaultTextStyle = TextReplacementStyle(
     fontFamily: 'NotoSans',
