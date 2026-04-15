@@ -17,8 +17,10 @@ import java.security.MessageDigest
 
 class MainActivity : FlutterActivity() {
     private var pendingPickerResult: MethodChannel.Result? = null
+    private var pendingSaveCopyResult: MethodChannel.Result? = null
     private var documentChannel: MethodChannel? = null
     private var pendingOpenedDocumentPayload: Map<String, Any?>? = null
+    private var pendingSaveCopySourcePath: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,6 +45,19 @@ class MainActivity : FlutterActivity() {
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "pickPdfDocument" -> handlePickPdfDocument(result)
+                "savePdfDocumentCopy" -> {
+                    val sourceLocalPath = call.argument<String>("sourceLocalPath")
+                    val displayName = call.argument<String>("displayName")
+                    if (sourceLocalPath.isNullOrBlank() || displayName.isNullOrBlank()) {
+                        result.error("invalid_argument", "Les informations d'export sont incompletes.", null)
+                        return@setMethodCallHandler
+                    }
+                    handleSavePdfDocumentCopy(
+                        sourceLocalPath = sourceLocalPath,
+                        displayName = displayName,
+                        result = result,
+                    )
+                }
                 "consumePendingOpenedPdfDocument" -> {
                     val payload = pendingOpenedDocumentPayload
                     pendingOpenedDocumentPayload = null
@@ -129,13 +144,52 @@ class MainActivity : FlutterActivity() {
         startActivityForResult(intent, REQUEST_PICK_PDF)
     }
 
-    @Deprecated("Android activity result API is not available on FlutterActivity here.")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_PICK_PDF) {
+    private fun handleSavePdfDocumentCopy(
+        sourceLocalPath: String,
+        displayName: String,
+        result: MethodChannel.Result,
+    ) {
+        if (pendingSaveCopyResult != null) {
+            result.error("save_busy", "Une autre sauvegarde est deja en cours.", null)
             return
         }
 
+        val sourceFile = File(sourceLocalPath).canonicalFile
+        val allowedDirectory = File(filesDir, "pdf_documents").canonicalFile
+        val allowedPrefix = "${allowedDirectory.path}${File.separator}"
+        if (!sourceFile.exists()) {
+            result.error("missing_file", "Le PDF exporte n'existe plus.", null)
+            return
+        }
+        if (!sourceFile.path.startsWith(allowedPrefix)) {
+            result.error("invalid_source", "Le PDF exporte n'est pas dans le repertoire autorise.", null)
+            return
+        }
+
+        pendingSaveCopyResult = result
+        pendingSaveCopySourcePath = sourceFile.path
+        val intent =
+            Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "application/pdf"
+                putExtra(Intent.EXTRA_TITLE, displayName)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            }
+        startActivityForResult(intent, REQUEST_CREATE_PDF)
+    }
+
+    @Deprecated("Android activity result API is not available on FlutterActivity here.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        when (requestCode) {
+            REQUEST_PICK_PDF -> handlePickResult(resultCode, data)
+            REQUEST_CREATE_PDF -> handleSaveCopyResult(resultCode, data)
+        }
+    }
+
+    private fun handlePickResult(resultCode: Int, data: Intent?) {
         val result = pendingPickerResult ?: return
         pendingPickerResult = null
 
@@ -165,6 +219,44 @@ class MainActivity : FlutterActivity() {
         }
 
         respondWithPreparedDocument(uri, result)
+    }
+
+    private fun handleSaveCopyResult(resultCode: Int, data: Intent?) {
+        val result = pendingSaveCopyResult ?: return
+        pendingSaveCopyResult = null
+        val sourceLocalPath = pendingSaveCopySourcePath
+        pendingSaveCopySourcePath = null
+
+        if (resultCode != RESULT_OK || sourceLocalPath.isNullOrBlank()) {
+            result.success(null)
+            return
+        }
+
+        val uri = data?.data
+        if (uri == null) {
+            result.success(null)
+            return
+        }
+
+        runCatching {
+            val intentFlags = data?.flags ?: 0
+            val grantedFlags =
+                (intentFlags and Intent.FLAG_GRANT_READ_URI_PERMISSION) or
+                    (intentFlags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            if (grantedFlags != 0) {
+                contentResolver.takePersistableUriPermission(uri, grantedFlags)
+            }
+            copyLocalPdfToUri(sourceLocalPath, uri)
+            buildPreparedDocumentPayload(uri)
+        }.onSuccess { payload ->
+            result.success(payload)
+        }.onFailure { error ->
+            result.error(
+                "save_failed",
+                error.message ?: "Impossible d'enregistrer la copie du PDF.",
+                null,
+            )
+        }
     }
 
     private fun respondWithPreparedDocument(uri: Uri, result: MethodChannel.Result) {
@@ -267,6 +359,19 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    private fun copyLocalPdfToUri(sourceLocalPath: String, destinationUri: Uri) {
+        val sourceFile = File(sourceLocalPath).canonicalFile
+        if (!sourceFile.exists()) {
+            throw FileNotFoundException("Le fichier PDF exporte n'existe plus.")
+        }
+
+        contentResolver.openOutputStream(destinationUri, "w")?.use { output ->
+            sourceFile.inputStream().use { input ->
+                input.copyTo(output)
+            }
+        } ?: throw FileNotFoundException("Impossible d'ouvrir la destination PDF.")
+    }
+
     private fun buildPreparedDocumentPayload(uri: Uri): Map<String, Any?>? {
         val metadata = resolveMetadata(uri) ?: return null
         val localPath = copyToLocalStorage(uri) ?: return null
@@ -347,5 +452,6 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL_NAME = "com.dnrfag.pdfreader/documents"
         private const val REQUEST_PICK_PDF = 4101
+        private const val REQUEST_CREATE_PDF = 4102
     }
 }

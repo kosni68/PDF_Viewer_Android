@@ -9,6 +9,7 @@ import '../../app/app_strings.dart';
 import '../../data/document_repository.dart';
 import '../../data/saved_document.dart';
 import '../../platform/document_bridge.dart';
+import '../editor/editor_screen.dart';
 
 class ReaderScreen extends StatefulWidget {
   const ReaderScreen({
@@ -50,6 +51,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   int? _pageCount;
   bool _showSearch = false;
   bool _isSharingDocument = false;
+  bool _isOpeningEditor = false;
   bool _viewerReady = false;
 
   @override
@@ -174,6 +176,51 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
+  Future<void> _openEditor() async {
+    final preparedDocument = _preparedDocument;
+    if (_status != _ReaderStatus.ready ||
+        preparedDocument == null ||
+        _isOpeningEditor) {
+      return;
+    }
+
+    setState(() => _isOpeningEditor = true);
+    try {
+      final result = await Navigator.of(context).push<PdfEditorResult>(
+        MaterialPageRoute<PdfEditorResult>(
+          builder: (context) {
+            return PdfEditorScreen(
+              repository: widget.repository,
+              documentBridge: widget.documentBridge,
+              savedDocument: _document,
+              preparedDocument: preparedDocument,
+            );
+          },
+        ),
+      );
+      if (!mounted || result == null) {
+        return;
+      }
+
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(
+          builder: (context) {
+            return ReaderScreen(
+              repository: widget.repository,
+              documentBridge: widget.documentBridge,
+              savedDocument: result.savedDocument,
+              preparedDocument: result.preparedDocument,
+            );
+          },
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isOpeningEditor = false);
+      }
+    }
+  }
+
   Future<void> _onViewerReady(PdfDocument document) async {
     final pageCount = document.pages.length;
     _ensureTextSearcherInitialized();
@@ -292,6 +339,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
           ],
         ),
         actions: <Widget>[
+          if (_status == _ReaderStatus.ready && preparedDocument != null)
+            IconButton(
+              onPressed: _isOpeningEditor ? null : _openEditor,
+              tooltip: 'Modifier le PDF',
+              icon: const Icon(Icons.edit_rounded),
+            ),
           if (_status == _ReaderStatus.ready && preparedDocument != null)
             IconButton(
               onPressed: _isSharingDocument ? null : _shareDocument,

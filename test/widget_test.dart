@@ -59,4 +59,10 @@ class _FakeDocumentBridge implements DocumentBridge {
     required String localPath,
     required String displayName,
   }) async {}
+
+  @override
+  Future<PreparedPdfDocument?> savePdfDocumentCopy({
+    required String sourceLocalPath,
+    required String displayName,
+  }) async => null;
 }

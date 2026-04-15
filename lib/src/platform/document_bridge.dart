@@ -35,6 +35,10 @@ abstract interface class DocumentBridge {
     required String localPath,
     required String displayName,
   });
+  Future<PreparedPdfDocument?> savePdfDocumentCopy({
+    required String sourceLocalPath,
+    required String displayName,
+  });
 }
 
 class MethodChannelDocumentBridge implements DocumentBridge {
@@ -111,5 +115,23 @@ class MethodChannelDocumentBridge implements DocumentBridge {
       'localPath': localPath,
       'displayName': displayName,
     });
+  }
+
+  @override
+  Future<PreparedPdfDocument?> savePdfDocumentCopy({
+    required String sourceLocalPath,
+    required String displayName,
+  }) async {
+    final result = await _channel.invokeMapMethod<dynamic, dynamic>(
+      'savePdfDocumentCopy',
+      <String, Object?>{
+        'sourceLocalPath': sourceLocalPath,
+        'displayName': displayName,
+      },
+    );
+    if (result == null) {
+      return null;
+    }
+    return PreparedPdfDocument.fromMap(result);
   }
 }
