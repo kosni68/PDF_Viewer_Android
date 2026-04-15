@@ -77,6 +77,7 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
   ];
   int _historyIndex = 0;
   String? _selectedObjectId;
+  bool _isChromeCollapsed = true;
 
   _EditorTool _activeTool = _EditorTool.select;
   ShapeKind _selectedShapeKind = ShapeKind.rectangle;
@@ -231,6 +232,12 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _toggleChromeVisibility() {
+    setState(() {
+      _isChromeCollapsed = !_isChromeCollapsed;
+    });
   }
 
   String _toolLabel(_EditorTool tool) {
@@ -1003,55 +1010,152 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
     final pageImage = _pageImage;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              widget.savedDocument.displayName.isEmpty
-                  ? AppStrings.unknownDocument
-                  : widget.savedDocument.displayName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            Text('Edition PDF', style: Theme.of(context).textTheme.labelMedium),
-          ],
-        ),
-        actions: <Widget>[
-          IconButton(
-            onPressed: _isSaving ? null : _saveEditedCopy,
-            tooltip: 'Enregistrer',
-            icon: _isSaving
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.save_alt_rounded),
-          ),
-        ],
-      ),
+      backgroundColor: Theme.of(context).colorScheme.surface,
       body: _isLoadingDocument
           ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: <Widget>[
-                _buildToolbar(),
-                _buildPageNavigationRow(),
-                Expanded(
-                  child: pageImage == null
-                      ? const Center(child: CircularProgressIndicator())
-                      : _buildCanvas(pageImage),
-                ),
-                if (_selectedObject != null) _buildSelectedObjectActions(),
-                _buildInspectorPanel(),
-              ],
+          : LayoutBuilder(
+              builder: (context, constraints) {
+                final inspectorMaxHeight = math.min(
+                  constraints.maxHeight * 0.42,
+                  360.0,
+                );
+
+                return Stack(
+                  children: <Widget>[
+                    Positioned.fill(
+                      child: pageImage == null
+                          ? const Center(child: CircularProgressIndicator())
+                          : _buildCanvas(pageImage),
+                    ),
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: SafeArea(
+                        bottom: false,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: <Widget>[
+                              _buildTopBar(),
+                              AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 180),
+                                child: _isChromeCollapsed
+                                    ? const SizedBox.shrink()
+                                    : Padding(
+                                        key: const ValueKey<String>(
+                                          'expanded-top-chrome',
+                                        ),
+                                        padding: const EdgeInsets.only(top: 12),
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: <Widget>[
+                                            _buildToolbar(),
+                                            const SizedBox(height: 8),
+                                            _buildPageNavigationRow(),
+                                          ],
+                                        ),
+                                      ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (!_isChromeCollapsed)
+                      Positioned(
+                        left: 12,
+                        right: 12,
+                        bottom: 12,
+                        child: SafeArea(
+                          top: false,
+                          child: _buildInspectorPanel(inspectorMaxHeight),
+                        ),
+                      ),
+                    if (_isChromeCollapsed)
+                      Positioned(
+                        left: 16,
+                        bottom: 16 + MediaQuery.paddingOf(context).bottom,
+                        child: FloatingActionButton.small(
+                          heroTag: 'editor_chrome_toggle',
+                          onPressed: _toggleChromeVisibility,
+                          tooltip: 'Afficher les outils',
+                          child: const Icon(Icons.tune_rounded),
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
     );
   }
 
+  Widget _buildTopBar() {
+    final title = widget.savedDocument.displayName.isEmpty
+        ? AppStrings.unknownDocument
+        : widget.savedDocument.displayName;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          children: <Widget>[
+            IconButton(
+              onPressed: () => Navigator.of(context).maybePop(),
+              tooltip: 'Retour',
+              icon: const Icon(Icons.arrow_back_rounded),
+            ),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    _isRenderingPage
+                        ? 'Page $_currentPageNumber / $_pageCount - rendu...'
+                        : 'Page $_currentPageNumber / $_pageCount',
+                    style: Theme.of(context).textTheme.labelMedium,
+                  ),
+                ],
+              ),
+            ),
+            if (!_isChromeCollapsed)
+              IconButton(
+                onPressed: _toggleChromeVisibility,
+                tooltip: 'Masquer les controles',
+                icon: const Icon(Icons.fullscreen_rounded),
+              ),
+            IconButton(
+              onPressed: _isSaving ? null : _saveEditedCopy,
+              tooltip: 'Enregistrer',
+              icon: _isSaving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save_alt_rounded),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildToolbar() {
-    return Material(
-      color: Theme.of(context).colorScheme.surfaceContainerLowest,
+    return Card(
+      margin: EdgeInsets.zero,
       child: SizedBox(
         height: 72,
         child: ListView(
@@ -1091,12 +1195,6 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
               tooltip: 'Retablir',
               icon: const Icon(Icons.redo_rounded),
             ),
-            const SizedBox(width: 8),
-            FilledButton.icon(
-              onPressed: _isSaving ? null : _saveEditedCopy,
-              icon: const Icon(Icons.check_rounded),
-              label: const Text('Enregistrer'),
-            ),
           ],
         ),
       ),
@@ -1104,48 +1202,51 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
   }
 
   Widget _buildPageNavigationRow() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
-      child: Row(
-        children: <Widget>[
-          IconButton(
-            onPressed: _currentPageNumber <= 1
-                ? null
-                : () => _goToPage(_currentPageNumber - 1),
-            icon: const Icon(Icons.chevron_left_rounded),
-          ),
-          Expanded(
-            child: Column(
-              children: <Widget>[
-                Text(
-                  'Page $_currentPageNumber / $_pageCount',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                if (_isRenderingPage)
-                  Text(
-                    'Rendu de la page en cours...',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-              ],
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+        child: Row(
+          children: <Widget>[
+            IconButton(
+              onPressed: _currentPageNumber <= 1
+                  ? null
+                  : () => _goToPage(_currentPageNumber - 1),
+              icon: const Icon(Icons.chevron_left_rounded),
             ),
-          ),
-          IconButton(
-            onPressed: _currentPageNumber >= _pageCount
-                ? null
-                : () => _goToPage(_currentPageNumber + 1),
-            icon: const Icon(Icons.chevron_right_rounded),
-          ),
-          const SizedBox(width: 8),
-          OutlinedButton.icon(
-            onPressed: () {
-              _transformationController.value = Matrix4.identity();
-            },
-            icon: const Icon(Icons.center_focus_strong_rounded),
-            label: const Text('Vue'),
-          ),
-        ],
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(
+                    'Navigation de page',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  Text(
+                    '$_currentPageNumber / $_pageCount',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              onPressed: _currentPageNumber >= _pageCount
+                  ? null
+                  : () => _goToPage(_currentPageNumber + 1),
+              icon: const Icon(Icons.chevron_right_rounded),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              onPressed: () {
+                _transformationController.value = Matrix4.identity();
+              },
+              icon: const Icon(Icons.center_focus_strong_rounded),
+              label: const Text('Vue'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1418,72 +1519,69 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
 
     final canRotate = selectedObject is! StrokeEditObject;
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: <Widget>[
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: <Widget>[
+        OutlinedButton.icon(
+          onPressed: _duplicateSelectedObject,
+          icon: const Icon(Icons.copy_rounded),
+          label: const Text('Dupliquer'),
+        ),
+        OutlinedButton.icon(
+          onPressed: _bringSelectedObjectForward,
+          icon: const Icon(Icons.flip_to_front_rounded),
+          label: const Text('Avant'),
+        ),
+        OutlinedButton.icon(
+          onPressed: _sendSelectedObjectBackward,
+          icon: const Icon(Icons.flip_to_back_rounded),
+          label: const Text('Arriere'),
+        ),
+        OutlinedButton.icon(
+          onPressed: _toggleSelectedObjectLock,
+          icon: Icon(
+            selectedObject.isLocked
+                ? Icons.lock_open_rounded
+                : Icons.lock_rounded,
+          ),
+          label: Text(
+            selectedObject.isLocked ? 'Deverrouiller' : 'Verrouiller',
+          ),
+        ),
+        if (selectedObject is TextEditObject)
           OutlinedButton.icon(
-            onPressed: _duplicateSelectedObject,
-            icon: const Icon(Icons.copy_rounded),
-            label: const Text('Dupliquer'),
+            onPressed: _editSelectedText,
+            icon: const Icon(Icons.edit_note_rounded),
+            label: const Text('Texte'),
           ),
+        if (canRotate)
           OutlinedButton.icon(
-            onPressed: _bringSelectedObjectForward,
-            icon: const Icon(Icons.flip_to_front_rounded),
-            label: const Text('Avant'),
+            onPressed: () => _rotateSelectedObject(-15),
+            icon: const Icon(Icons.rotate_left_rounded),
+            label: const Text('-15'),
           ),
+        if (canRotate)
           OutlinedButton.icon(
-            onPressed: _sendSelectedObjectBackward,
-            icon: const Icon(Icons.flip_to_back_rounded),
-            label: const Text('Arriere'),
+            onPressed: () => _rotateSelectedObject(15),
+            icon: const Icon(Icons.rotate_right_rounded),
+            label: const Text('+15'),
           ),
-          OutlinedButton.icon(
-            onPressed: _toggleSelectedObjectLock,
-            icon: Icon(
-              selectedObject.isLocked
-                  ? Icons.lock_open_rounded
-                  : Icons.lock_rounded,
-            ),
-            label: Text(
-              selectedObject.isLocked ? 'Deverrouiller' : 'Verrouiller',
-            ),
-          ),
-          if (selectedObject is TextEditObject)
-            OutlinedButton.icon(
-              onPressed: _editSelectedText,
-              icon: const Icon(Icons.edit_note_rounded),
-              label: const Text('Texte'),
-            ),
-          if (canRotate)
-            OutlinedButton.icon(
-              onPressed: () => _rotateSelectedObject(-15),
-              icon: const Icon(Icons.rotate_left_rounded),
-              label: const Text('-15'),
-            ),
-          if (canRotate)
-            OutlinedButton.icon(
-              onPressed: () => _rotateSelectedObject(15),
-              icon: const Icon(Icons.rotate_right_rounded),
-              label: const Text('+15'),
-            ),
-          FilledButton.tonalIcon(
-            onPressed: _deleteSelectedObject,
-            icon: const Icon(Icons.delete_outline_rounded),
-            label: const Text('Supprimer'),
-          ),
-        ],
-      ),
+        FilledButton.tonalIcon(
+          onPressed: _deleteSelectedObject,
+          icon: const Icon(Icons.delete_outline_rounded),
+          label: const Text('Supprimer'),
+        ),
+      ],
     );
   }
 
-  Widget _buildInspectorPanel() {
+  Widget _buildInspectorPanel(double maxHeight) {
     final selectedObject = _selectedObject;
     final showPanel =
         selectedObject != null || _activeTool != _EditorTool.select;
     if (!showPanel) {
-      return const SizedBox(height: 12);
+      return const SizedBox.shrink();
     }
 
     Widget panel;
@@ -1501,14 +1599,48 @@ class _PdfEditorScreenState extends State<PdfEditorScreen> {
       panel = _buildVisualObjectInspector(selectedObject);
     }
 
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: SingleChildScrollView(child: panel),
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      child: Card(
+        margin: EdgeInsets.zero,
+        clipBehavior: Clip.antiAlias,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      'Options d edition',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _toggleChromeVisibility,
+                    tooltip: 'Masquer les controles',
+                    icon: const Icon(Icons.keyboard_arrow_down_rounded),
+                  ),
+                ],
+              ),
+              if (selectedObject != null) ...<Widget>[
+                const SizedBox(height: 8),
+                Text(
+                  'Objet selectionne',
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                const SizedBox(height: 10),
+                _buildSelectedObjectActions(),
+                const SizedBox(height: 16),
+                const Divider(),
+                const SizedBox(height: 12),
+              ],
+              panel,
+            ],
           ),
         ),
       ),
