@@ -3,10 +3,10 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/painting.dart';
 import 'package:image/image.dart' as img;
 import 'package:pdfrx/pdfrx.dart';
 
+import '../editor_rendering.dart';
 import '../models/editor_document_state.dart';
 
 class PdfFlattenExportService {
@@ -38,7 +38,9 @@ class PdfFlattenExportService {
       }
 
       outputDocument = await PdfDocument.createNew(sourceName: outputPdfPath);
-      outputDocument.pages = pageDocuments.expand((document) => document.pages).toList(growable: false);
+      outputDocument.pages = pageDocuments
+          .expand((document) => document.pages)
+          .toList(growable: false);
       final outputBytes = await outputDocument.encodePdf();
       await File(outputPdfPath).writeAsBytes(outputBytes, flush: true);
     } finally {
@@ -59,8 +61,12 @@ class PdfFlattenExportService {
     required Map<String, ui.Image> overlayImages,
   }) async {
     final renderScale = _maxRenderEdge / math.max(page.width, page.height);
-    final fullWidth = math.max(1, (page.width * renderScale).round()).toDouble();
-    final fullHeight = math.max(1, (page.height * renderScale).round()).toDouble();
+    final fullWidth = math
+        .max(1, (page.width * renderScale).round())
+        .toDouble();
+    final fullHeight = math
+        .max(1, (page.height * renderScale).round())
+        .toDouble();
     final rendered = await page.render(
       fullWidth: fullWidth,
       fullHeight: fullHeight,
@@ -81,9 +87,13 @@ class PdfFlattenExportService {
         overlayImages: overlayImages,
       );
       try {
-        final rawBytes = await composedImage.toByteData(format: ui.ImageByteFormat.rawRgba);
+        final rawBytes = await composedImage.toByteData(
+          format: ui.ImageByteFormat.rawRgba,
+        );
         if (rawBytes == null) {
-          throw StateError('Impossible de convertir la page ${page.pageNumber} en image exportable.');
+          throw StateError(
+            'Impossible de convertir la page ${page.pageNumber} en image exportable.',
+          );
         }
 
         final jpegBytes = await compute(
@@ -116,15 +126,15 @@ class PdfFlattenExportService {
     required Map<String, ui.Image> overlayImages,
   }) async {
     final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    final pageRect = Rect.fromLTWH(
+    final canvas = ui.Canvas(recorder);
+    final pageRect = ui.Rect.fromLTWH(
       0,
       0,
       baseImage.width.toDouble(),
       baseImage.height.toDouble(),
     );
 
-    canvas.drawImage(baseImage, Offset.zero, Paint());
+    canvas.drawImage(baseImage, ui.Offset.zero, ui.Paint());
 
     for (final object in objects) {
       final rect = _normalizedRectToPixels(
@@ -134,13 +144,37 @@ class PdfFlattenExportService {
       );
       switch (object) {
         case TextEditObject():
-          _paintTextObject(canvas, object, rect);
+          paintTextObject(canvas, object, rect);
+        case StrokeEditObject():
+          paintStrokeObject(canvas, object, rect, pageRect.size);
+        case ShapeEditObject():
+          paintShapeObject(canvas, object, rect, pageRect.size);
         case SignatureEditObject():
-          final image = await _loadOverlayImage(object.id, object.imageBytes, overlayImages);
-          _paintImageObject(canvas, image, rect, object.rotationDegrees);
+          final image = await _loadOverlayImage(
+            object.id,
+            object.imageBytes,
+            overlayImages,
+          );
+          paintImageObject(
+            canvas,
+            image,
+            rect,
+            object.rotationDegrees,
+            object.opacity,
+          );
         case ImageEditObject():
-          final image = await _loadOverlayImage(object.id, object.imageBytes, overlayImages);
-          _paintImageObject(canvas, image, rect, object.rotationDegrees);
+          final image = await _loadOverlayImage(
+            object.id,
+            object.imageBytes,
+            overlayImages,
+          );
+          paintImageObject(
+            canvas,
+            image,
+            rect,
+            object.rotationDegrees,
+            object.opacity,
+          );
       }
     }
 
@@ -148,75 +182,17 @@ class PdfFlattenExportService {
     return picture.toImage(baseImage.width, baseImage.height);
   }
 
-  Rect _normalizedRectToPixels(Rect rect, double pageWidth, double pageHeight) {
-    return Rect.fromLTWH(
+  ui.Rect _normalizedRectToPixels(
+    ui.Rect rect,
+    double pageWidth,
+    double pageHeight,
+  ) {
+    return ui.Rect.fromLTWH(
       rect.left * pageWidth,
       rect.top * pageHeight,
       rect.width * pageWidth,
       rect.height * pageHeight,
     );
-  }
-
-  void _paintTextObject(Canvas canvas, TextEditObject object, Rect rect) {
-    final padding = math.max(6.0, math.min(rect.width, rect.height) * object.style.paddingFactor);
-    final textStyle = TextStyle(
-      color: object.style.textColor,
-      fontWeight: object.style.fontWeight,
-      fontSize: math.max(12, rect.height * object.style.fontScale),
-      height: 1.08,
-    );
-
-    canvas.save();
-    canvas.clipRect(rect);
-    canvas.drawRect(
-      rect,
-      Paint()..color = object.style.backgroundColor,
-    );
-
-    final textPainter = TextPainter(
-      text: TextSpan(
-        text: object.text,
-        style: textStyle,
-      ),
-      textDirection: TextDirection.ltr,
-      maxLines: null,
-    )..layout(maxWidth: math.max(24, rect.width - (padding * 2)));
-
-    textPainter.paint(
-      canvas,
-      Offset(rect.left + padding, rect.top + padding),
-    );
-    canvas.restore();
-  }
-
-  void _paintImageObject(
-    Canvas canvas,
-    ui.Image image,
-    Rect rect,
-    double rotationDegrees,
-  ) {
-    final destination = Rect.fromCenter(
-      center: Offset.zero,
-      width: rect.width,
-      height: rect.height,
-    );
-    final source = Rect.fromLTWH(
-      0,
-      0,
-      image.width.toDouble(),
-      image.height.toDouble(),
-    );
-
-    canvas.save();
-    canvas.translate(rect.center.dx, rect.center.dy);
-    canvas.rotate(rotationDegrees * math.pi / 180);
-    canvas.drawImageRect(
-      image,
-      source,
-      destination,
-      Paint()..filterQuality = FilterQuality.high,
-    );
-    canvas.restore();
   }
 
   Future<ui.Image> _loadOverlayImage(
@@ -259,10 +235,5 @@ Uint8List _encodeJpeg(_JpegEncodeRequest request) {
     numChannels: 4,
     order: img.ChannelOrder.rgba,
   );
-  return Uint8List.fromList(
-    img.encodeJpg(
-      image,
-      quality: request.quality,
-    ),
-  );
+  return Uint8List.fromList(img.encodeJpg(image, quality: request.quality));
 }

@@ -68,6 +68,23 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  fonts:
+    - family: NotoSans
+      fonts:
+        - asset: assets/fonts/NotoSans-Variable.ttf
+    - family: NotoSerif
+      fonts:
+        - asset: assets/fonts/NotoSerif-Variable.ttf
+    - family: RobotoMono
+      fonts:
+        - asset: assets/fonts/RobotoMono-Variable.ttf
+    - family: Oswald
+      fonts:
+        - asset: assets/fonts/Oswald-Variable.ttf
+    - family: Caveat
+      fonts:
+        - asset: assets/fonts/Caveat-Variable.ttf
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
