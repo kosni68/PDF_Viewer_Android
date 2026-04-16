@@ -22,6 +22,7 @@ void main() {
 
     expect(find.text('Aucun document'), findsOneWidget);
     expect(find.text('Ouvrir un PDF'), findsWidgets);
+    expect(find.text('Scanner un document'), findsWidgets);
   });
 }
 

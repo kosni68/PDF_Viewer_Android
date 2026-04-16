@@ -7,6 +7,7 @@ import '../../data/document_repository.dart';
 import '../../data/saved_document.dart';
 import '../../platform/document_bridge.dart';
 import '../reader/reader_screen.dart';
+import '../scanner/document_scanner_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({
@@ -26,6 +27,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<SavedDocument> _documents = const <SavedDocument>[];
   bool _isLoading = true;
   bool _isOpeningDocument = false;
+  bool _isOpeningScanner = false;
   bool _favoritesOnly = false;
   StreamSubscription<PreparedPdfDocument>? _openedDocumentSubscription;
 
@@ -116,6 +118,38 @@ class _HomeScreenState extends State<HomeScreen> {
     await _loadDocuments();
   }
 
+  Future<void> _openScanner() async {
+    if (_isOpeningScanner || _isOpeningDocument) {
+      return;
+    }
+
+    setState(() => _isOpeningScanner = true);
+    try {
+      final result = await Navigator.of(context).push<DocumentScannerResult>(
+        MaterialPageRoute<DocumentScannerResult>(
+          builder: (context) {
+            return DocumentScannerScreen(
+              repository: widget.repository,
+              documentBridge: widget.documentBridge,
+            );
+          },
+        ),
+      );
+      if (!mounted || result == null) {
+        return;
+      }
+
+      await _openReader(
+        savedDocument: result.savedDocument,
+        preparedDocument: result.preparedDocument,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isOpeningScanner = false);
+      }
+    }
+  }
+
   Future<void> _consumePendingOpenedDocument() async {
     final preparedDocument = await widget.documentBridge
         .consumePendingOpenedPdfDocument();
@@ -184,6 +218,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isBusy = _isOpeningDocument || _isOpeningScanner;
     final favorites = _documents
         .where((document) => document.isFavorite)
         .toList();
@@ -226,8 +261,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(height: 20),
                 _LibraryHeroCard(
-                  isOpeningDocument: _isOpeningDocument,
+                  isBusy: isBusy,
                   onOpenPdf: _pickDocument,
+                  onScanDocument: _openScanner,
                 ),
                 const SizedBox(height: 20),
                 Row(
@@ -253,7 +289,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   const Center(child: CircularProgressIndicator()),
                 ] else if (_documents.isEmpty) ...<Widget>[
                   const SizedBox(height: 28),
-                  _EmptyStateCard(onOpenPdf: _pickDocument),
+                  _EmptyStateCard(
+                    onOpenPdf: _pickDocument,
+                    onScanDocument: _openScanner,
+                  ),
                 ] else ...<Widget>[
                   if (favorites.isNotEmpty && !_favoritesOnly) ...<Widget>[
                     const SizedBox(height: 20),
@@ -302,12 +341,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
 class _LibraryHeroCard extends StatelessWidget {
   const _LibraryHeroCard({
-    required this.isOpeningDocument,
+    required this.isBusy,
     required this.onOpenPdf,
+    required this.onScanDocument,
   });
 
-  final bool isOpeningDocument;
+  final bool isBusy;
   final VoidCallback onOpenPdf;
+  final VoidCallback onScanDocument;
 
   @override
   Widget build(BuildContext context) {
@@ -359,12 +400,12 @@ class _LibraryHeroCard extends StatelessWidget {
             ),
             const SizedBox(height: 18),
             ElevatedButton.icon(
-              onPressed: isOpeningDocument ? null : onOpenPdf,
+              onPressed: isBusy ? null : onOpenPdf,
               style: ElevatedButton.styleFrom(
                 backgroundColor: theme.colorScheme.secondary,
                 foregroundColor: theme.colorScheme.onSecondary,
               ),
-              icon: isOpeningDocument
+              icon: isBusy
                   ? const SizedBox(
                       width: 18,
                       height: 18,
@@ -372,10 +413,20 @@ class _LibraryHeroCard extends StatelessWidget {
                     )
                   : const Icon(Icons.folder_open_rounded),
               label: Text(
-                isOpeningDocument
-                    ? AppStrings.readerLoading
-                    : AppStrings.openPdf,
+                isBusy ? AppStrings.readerLoading : AppStrings.openPdf,
               ),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: isBusy ? null : onScanDocument,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: theme.colorScheme.onPrimary,
+                side: BorderSide(
+                  color: theme.colorScheme.onPrimary.withValues(alpha: 0.4),
+                ),
+              ),
+              icon: const Icon(Icons.document_scanner_rounded),
+              label: const Text(AppStrings.scanDocument),
             ),
           ],
         ),
@@ -385,9 +436,13 @@ class _LibraryHeroCard extends StatelessWidget {
 }
 
 class _EmptyStateCard extends StatelessWidget {
-  const _EmptyStateCard({required this.onOpenPdf});
+  const _EmptyStateCard({
+    required this.onOpenPdf,
+    required this.onScanDocument,
+  });
 
   final VoidCallback onOpenPdf;
+  final VoidCallback onScanDocument;
 
   @override
   Widget build(BuildContext context) {
@@ -416,6 +471,12 @@ class _EmptyStateCard extends StatelessWidget {
               onPressed: onOpenPdf,
               icon: const Icon(Icons.folder_open_rounded),
               label: const Text(AppStrings.openPdf),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: onScanDocument,
+              icon: const Icon(Icons.document_scanner_rounded),
+              label: const Text(AppStrings.scanDocument),
             ),
           ],
         ),
