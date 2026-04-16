@@ -3,6 +3,8 @@ import 'dart:ui';
 
 enum ScanColorMode { color, grayscale, blackWhite }
 
+enum ScanFilterPreset { none, document, vivid, warm, cool }
+
 enum ScanExportQuality { original, optimized, light }
 
 class ScanDocumentCorners {
@@ -68,6 +70,7 @@ class ScannedPageDraft {
     required this.rotationQuarterTurns,
     required this.brightness,
     required this.contrast,
+    required this.filterPreset,
     required this.colorMode,
     required this.width,
     required this.height,
@@ -81,6 +84,7 @@ class ScannedPageDraft {
   final int rotationQuarterTurns;
   final double brightness;
   final double contrast;
+  final ScanFilterPreset filterPreset;
   final ScanColorMode colorMode;
   final int width;
   final int height;
@@ -95,6 +99,7 @@ class ScannedPageDraft {
     int? rotationQuarterTurns,
     double? brightness,
     double? contrast,
+    ScanFilterPreset? filterPreset,
     ScanColorMode? colorMode,
     int? width,
     int? height,
@@ -110,6 +115,7 @@ class ScannedPageDraft {
       rotationQuarterTurns: rotationQuarterTurns ?? this.rotationQuarterTurns,
       brightness: brightness ?? this.brightness,
       contrast: contrast ?? this.contrast,
+      filterPreset: filterPreset ?? this.filterPreset,
       colorMode: colorMode ?? this.colorMode,
       width: width ?? this.width,
       height: height ?? this.height,

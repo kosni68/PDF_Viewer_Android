@@ -60,6 +60,12 @@ abstract final class AppStrings {
   static const scanAdjustments = 'Retouches';
   static const scanBrightness = 'Luminosite';
   static const scanContrast = 'Contraste';
+  static const scanFilter = 'Filtre';
+  static const scanFilterNone = 'Aucun';
+  static const scanFilterDocument = 'Document';
+  static const scanFilterVivid = 'Vif';
+  static const scanFilterWarm = 'Chaud';
+  static const scanFilterCool = 'Froid';
   static const scanColorMode = 'Mode couleur';
   static const scanColorModeColor = 'Couleur';
   static const scanColorModeGrayscale = 'Gris';

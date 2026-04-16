@@ -62,11 +62,18 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
   Rect? _pendingCropRectNormalized;
   ScanDocumentCorners? _pendingDocumentCornersNormalized;
   int _pageCounter = 0;
+  Timer? _previewRefreshDebounce;
 
   @override
   void initState() {
     super.initState();
     unawaited(_recoverLostImages());
+  }
+
+  @override
+  void dispose() {
+    _previewRefreshDebounce?.cancel();
+    super.dispose();
   }
 
   String _newPageId() {
@@ -95,7 +102,9 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
       if (!mounted || importedImage == null) {
         return;
       }
-      await _appendImportedImages(<ImportedScanImage>[importedImage]);
+      await _appendImportedImages(<ImportedScanImage>[
+        importedImage,
+      ], openCropEditor: true);
     } catch (_) {
       if (mounted) {
         _showMessage(AppStrings.scannerImportFailed);
@@ -131,8 +140,9 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
   }
 
   Future<void> _appendImportedImages(
-    List<ImportedScanImage> importedImages,
-  ) async {
+    List<ImportedScanImage> importedImages, {
+    bool openCropEditor = false,
+  }) async {
     final pages = await Future.wait<ScannedPageDraft>(
       importedImages.map(
         (importedImage) => _imageProcessingService.createDraft(
@@ -154,6 +164,34 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
       _pendingDocumentCornersNormalized = null;
       _syncPreviewFutures();
     });
+
+    if (openCropEditor && pages.length == 1) {
+      await _openCropEditorForSelectedPage(triggerAutoDetection: true);
+    }
+  }
+
+  Future<void> _openCropEditorForSelectedPage({
+    bool triggerAutoDetection = false,
+  }) async {
+    final selectedPage = _selectedPage;
+    if (selectedPage == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _isCropping = true;
+      _cropEditMode = selectedPage.documentCornersNormalized != null
+          ? _ScanCropEditMode.corners
+          : _ScanCropEditMode.rectangle;
+      _pendingCropRectNormalized = selectedPage.cropRectNormalized;
+      _pendingDocumentCornersNormalized =
+          selectedPage.documentCornersNormalized ?? _defaultDocumentCorners();
+      _syncPreviewFutures();
+    });
+
+    if (triggerAutoDetection) {
+      await _autoCropSelectedPage();
+    }
   }
 
   void _syncPreviewFutures() {
@@ -161,12 +199,28 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
     _previewFuture = selectedPage == null
         ? null
         : _imageProcessingService.buildPreviewPage(selectedPage);
-    _cropEditorFuture = !_isCropping || selectedPage == null
+    _cropEditorFuture =
+        !_isCropping ||
+            selectedPage == null ||
+            _cropEditMode != _ScanCropEditMode.rectangle
         ? null
         : _imageProcessingService.buildCropEditorPage(selectedPage);
-    _cornerEditorFuture = !_isCropping || selectedPage == null
+    _cornerEditorFuture =
+        !_isCropping ||
+            selectedPage == null ||
+            _cropEditMode != _ScanCropEditMode.corners
         ? null
         : _imageProcessingService.buildCornerEditorPage(selectedPage);
+  }
+
+  void _schedulePreviewRefresh() {
+    _previewRefreshDebounce?.cancel();
+    _previewRefreshDebounce = Timer(const Duration(milliseconds: 120), () {
+      if (!mounted) {
+        return;
+      }
+      setState(_syncPreviewFutures);
+    });
   }
 
   void _selectPage(String pageId) {
@@ -231,8 +285,9 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
   }
 
   void _updateSelectedPage(
-    ScannedPageDraft Function(ScannedPageDraft page) update,
-  ) {
+    ScannedPageDraft Function(ScannedPageDraft page) update, {
+    bool debouncePreview = false,
+  }) {
     final selectedPage = _selectedPage;
     if (selectedPage == null) {
       return;
@@ -240,8 +295,14 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
 
     setState(() {
       _draft = _draft.replacePage(update(selectedPage));
-      _syncPreviewFutures();
+      if (!debouncePreview) {
+        _syncPreviewFutures();
+      }
     });
+
+    if (debouncePreview) {
+      _schedulePreviewRefresh();
+    }
   }
 
   ScanDocumentCorners _defaultDocumentCorners() {
@@ -476,11 +537,21 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
   }
 
   void _updateBrightness(double value) {
-    _updateSelectedPage((page) => page.copyWith(brightness: value));
+    _updateSelectedPage(
+      (page) => page.copyWith(brightness: value),
+      debouncePreview: true,
+    );
   }
 
   void _updateContrast(double value) {
-    _updateSelectedPage((page) => page.copyWith(contrast: value));
+    _updateSelectedPage(
+      (page) => page.copyWith(contrast: value),
+      debouncePreview: true,
+    );
+  }
+
+  void _updateFilterPreset(ScanFilterPreset filterPreset) {
+    _updateSelectedPage((page) => page.copyWith(filterPreset: filterPreset));
   }
 
   void _updateColorMode(ScanColorMode colorMode) {
@@ -998,6 +1069,7 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
   ) {
     final brightness = selectedPage?.brightness ?? 0.0;
     final contrast = selectedPage?.contrast ?? 0.0;
+    final filterPreset = selectedPage?.filterPreset ?? ScanFilterPreset.none;
     final colorMode = selectedPage?.colorMode ?? ScanColorMode.color;
 
     return Column(
@@ -1042,6 +1114,24 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
           max: 1,
           divisions: 20,
           onChanged: selectedPage == null ? null : _updateContrast,
+        ),
+        const SizedBox(height: 10),
+        Text(AppStrings.scanFilter, style: theme.textTheme.labelLarge),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: ScanFilterPreset.values
+              .map(
+                (preset) => ChoiceChip(
+                  label: Text(_labelForFilterPreset(preset)),
+                  selected: filterPreset == preset,
+                  onSelected: selectedPage == null
+                      ? null
+                      : (_) => _updateFilterPreset(preset),
+                ),
+              )
+              .toList(growable: false),
         ),
         const SizedBox(height: 10),
         Text(AppStrings.scanColorMode, style: theme.textTheme.labelLarge),
@@ -1165,6 +1255,16 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
       ScanColorMode.color => AppStrings.scanColorModeColor,
       ScanColorMode.grayscale => AppStrings.scanColorModeGrayscale,
       ScanColorMode.blackWhite => AppStrings.scanColorModeBlackWhite,
+    };
+  }
+
+  String _labelForFilterPreset(ScanFilterPreset filterPreset) {
+    return switch (filterPreset) {
+      ScanFilterPreset.none => AppStrings.scanFilterNone,
+      ScanFilterPreset.document => AppStrings.scanFilterDocument,
+      ScanFilterPreset.vivid => AppStrings.scanFilterVivid,
+      ScanFilterPreset.warm => AppStrings.scanFilterWarm,
+      ScanFilterPreset.cool => AppStrings.scanFilterCool,
     };
   }
 

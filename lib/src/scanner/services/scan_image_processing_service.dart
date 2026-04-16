@@ -33,8 +33,8 @@ class ScanImageProcessingService {
   const ScanImageProcessingService();
 
   static const Rect fullCropRect = Rect.fromLTWH(0, 0, 1, 1);
-  static const int previewLongEdgePx = 1100;
-  static const int cropEditorLongEdgePx = 1280;
+  static const int previewLongEdgePx = 900;
+  static const int cropEditorLongEdgePx = 1080;
   static const int autoCropLongEdgePx = 720;
 
   Future<ScannedPageDraft> createDraft({
@@ -61,6 +61,7 @@ class ScanImageProcessingService {
       rotationQuarterTurns: 0,
       brightness: 0,
       contrast: 0,
+      filterPreset: ScanFilterPreset.none,
       colorMode: ScanColorMode.color,
       width: response['width']! as int,
       height: response['height']! as int,
@@ -204,6 +205,7 @@ Map<String, Object?> _serializePage(ScannedPageDraft page) {
     'rotationQuarterTurns': page.rotationQuarterTurns,
     'brightness': page.brightness,
     'contrast': page.contrast,
+    'filterPresetIndex': page.filterPreset.index,
     'colorModeIndex': page.colorMode.index,
     'width': page.width,
     'height': page.height,
@@ -257,6 +259,8 @@ Map<String, Object?> _processPageOnWorker(Map<String, Object?> request) {
       processedImage,
       brightness: request['brightness']! as double,
       contrast: request['contrast']! as double,
+      filterPreset:
+          ScanFilterPreset.values[request['filterPresetIndex']! as int],
       colorMode: ScanColorMode.values[request['colorModeIndex']! as int],
     );
   }
@@ -555,8 +559,11 @@ img.Image _applyAdjustments(
   img.Image source, {
   required double brightness,
   required double contrast,
+  required ScanFilterPreset filterPreset,
   required ScanColorMode colorMode,
 }) {
+  source = _applyFilterPreset(source, filterPreset);
+
   if (brightness != 0 || contrast != 0) {
     source = img.adjustColor(
       source,
@@ -572,6 +579,45 @@ img.Image _applyAdjustments(
       return img.grayscale(source);
     case ScanColorMode.blackWhite:
       return img.luminanceThreshold(img.grayscale(source), threshold: 0.62);
+  }
+}
+
+img.Image _applyFilterPreset(img.Image source, ScanFilterPreset filterPreset) {
+  switch (filterPreset) {
+    case ScanFilterPreset.none:
+      return source;
+    case ScanFilterPreset.document:
+      source = img.histogramStretch(
+        source,
+        mode: img.HistogramEqualizeMode.color,
+      );
+      return img.adjustColor(
+        source,
+        contrast: 1.16,
+        brightness: 1.04,
+        saturation: 1.02,
+      );
+    case ScanFilterPreset.vivid:
+      return img.adjustColor(
+        source,
+        contrast: 1.12,
+        brightness: 1.03,
+        saturation: 1.24,
+      );
+    case ScanFilterPreset.warm:
+      return img.adjustColor(
+        source,
+        brightness: 1.03,
+        saturation: 1.08,
+        hue: 8,
+      );
+    case ScanFilterPreset.cool:
+      return img.adjustColor(
+        source,
+        brightness: 1.0,
+        saturation: 1.04,
+        hue: -8,
+      );
   }
 }
 

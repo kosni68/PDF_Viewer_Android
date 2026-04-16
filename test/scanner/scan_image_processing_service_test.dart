@@ -47,6 +47,7 @@ void main() {
       expect(draft.height, 2);
       expect(draft.documentCornersNormalized, isNull);
       expect(draft.cropRectNormalized, ScanImageProcessingService.fullCropRect);
+      expect(draft.filterPreset, ScanFilterPreset.none);
       expect(draft.colorMode, ScanColorMode.color);
     });
 
@@ -119,6 +120,22 @@ void main() {
       expect(<int>{0, 255}, contains(sample.r));
       expect(sample.r, sample.g);
       expect(sample.g, sample.b);
+    });
+
+    test('filter preset applies an alternate rendering pipeline', () async {
+      final draft = await service.createDraft(
+        id: 'page-1',
+        sourceName: 'capture.png',
+        originalBytes: _encodeTestImage(32, 32),
+      );
+
+      final processed = await service.buildPreviewPage(
+        draft.copyWith(filterPreset: ScanFilterPreset.vivid),
+      );
+
+      expect(processed.bytes, isNotEmpty);
+      expect(processed.width, greaterThan(0));
+      expect(processed.height, greaterThan(0));
     });
 
     test('export quality limits long edge size', () async {
@@ -221,6 +238,7 @@ ScannedPageDraft _page({required String id}) {
     rotationQuarterTurns: 0,
     brightness: 0,
     contrast: 0,
+    filterPreset: ScanFilterPreset.none,
     colorMode: ScanColorMode.color,
     width: 10,
     height: 10,
