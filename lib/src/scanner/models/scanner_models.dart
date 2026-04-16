@@ -5,6 +5,41 @@ enum ScanColorMode { color, grayscale, blackWhite }
 
 enum ScanExportQuality { original, optimized, light }
 
+class ScanDocumentCorners {
+  const ScanDocumentCorners({
+    required this.topLeft,
+    required this.topRight,
+    required this.bottomLeft,
+    required this.bottomRight,
+  });
+
+  final Offset topLeft;
+  final Offset topRight;
+  final Offset bottomLeft;
+  final Offset bottomRight;
+
+  List<Offset> get ordered => <Offset>[
+    topLeft,
+    topRight,
+    bottomLeft,
+    bottomRight,
+  ];
+
+  ScanDocumentCorners copyWith({
+    Offset? topLeft,
+    Offset? topRight,
+    Offset? bottomLeft,
+    Offset? bottomRight,
+  }) {
+    return ScanDocumentCorners(
+      topLeft: topLeft ?? this.topLeft,
+      topRight: topRight ?? this.topRight,
+      bottomLeft: bottomLeft ?? this.bottomLeft,
+      bottomRight: bottomRight ?? this.bottomRight,
+    );
+  }
+}
+
 extension ScanExportQualityConfig on ScanExportQuality {
   int get maxLongEdgePx {
     return switch (this) {
@@ -28,6 +63,7 @@ class ScannedPageDraft {
     required this.id,
     required this.sourceName,
     required this.originalBytes,
+    required this.documentCornersNormalized,
     required this.cropRectNormalized,
     required this.rotationQuarterTurns,
     required this.brightness,
@@ -40,6 +76,7 @@ class ScannedPageDraft {
   final String id;
   final String sourceName;
   final Uint8List originalBytes;
+  final ScanDocumentCorners? documentCornersNormalized;
   final Rect cropRectNormalized;
   final int rotationQuarterTurns;
   final double brightness;
@@ -52,6 +89,8 @@ class ScannedPageDraft {
     String? id,
     String? sourceName,
     Uint8List? originalBytes,
+    ScanDocumentCorners? documentCornersNormalized,
+    bool clearDocumentCorners = false,
     Rect? cropRectNormalized,
     int? rotationQuarterTurns,
     double? brightness,
@@ -64,6 +103,9 @@ class ScannedPageDraft {
       id: id ?? this.id,
       sourceName: sourceName ?? this.sourceName,
       originalBytes: originalBytes ?? this.originalBytes,
+      documentCornersNormalized: clearDocumentCorners
+          ? null
+          : documentCornersNormalized ?? this.documentCornersNormalized,
       cropRectNormalized: cropRectNormalized ?? this.cropRectNormalized,
       rotationQuarterTurns: rotationQuarterTurns ?? this.rotationQuarterTurns,
       brightness: brightness ?? this.brightness,

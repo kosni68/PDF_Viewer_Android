@@ -44,11 +44,16 @@ abstract final class AppStrings {
   static const scanCrop = 'Rogner';
   static const scanCropTitle = 'Rognage';
   static const scanCropBody =
-      'Ajustez la zone du document, lancez un cadrage auto ou revenez au cadrage complet.';
+      'Ajustez la zone du document, lancez un cadrage auto avec redressement ou revenez au cadrage complet.';
   static const scanApplyCrop = 'Appliquer';
   static const scanCancelCrop = 'Annuler le rognage';
-  static const scanAutoCrop = 'Cadrage auto';
+  static const scanAutoCrop = 'Auto cadrage';
   static const scanResetCrop = 'Cadrage complet';
+  static const scanRectCropMode = 'Rectangle';
+  static const scanCornerCropMode = '4 coins';
+  static const scanCornerCropBody =
+      'Deplacez chaque poignee pour aligner les quatre coins du document.';
+  static const scanPerspectiveCorrectionActive = 'Redressement auto actif';
   static const scanRotateLeft = 'Rotation -90';
   static const scanRotateRight = 'Rotation +90';
   static const scanDeletePage = 'Supprimer';
@@ -66,7 +71,7 @@ abstract final class AppStrings {
   static const scanReorderHint =
       'Maintenez une miniature pour reordonner les pages.';
   static const scannerAutoCropFailed =
-      'Impossible de detecter automatiquement les bords du document.';
+      'Impossible de detecter ou redresser automatiquement ce document.';
 
   static String lastPage(int pageNumber) => 'Derniere page : $pageNumber';
   static String pageCount(int pageCount) => 'Pages : $pageCount';

@@ -45,11 +45,12 @@ void main() {
 
       expect(draft.width, 4);
       expect(draft.height, 2);
+      expect(draft.documentCornersNormalized, isNull);
       expect(draft.cropRectNormalized, ScanImageProcessingService.fullCropRect);
       expect(draft.colorMode, ScanColorMode.color);
     });
 
-    test('crop round-trip remains stable through rotation mapping', () async {
+    test('crop round-trip remains stable in crop editor space', () async {
       final draft = await service.createDraft(
         id: 'page-1',
         sourceName: 'capture.png',
@@ -58,6 +59,12 @@ void main() {
       final rotated = draft.copyWith(
         cropRectNormalized: const Rect.fromLTWH(0.2, 0.1, 0.45, 0.6),
         rotationQuarterTurns: 1,
+        documentCornersNormalized: const ScanDocumentCorners(
+          topLeft: Offset(0.1, 0.1),
+          topRight: Offset(0.9, 0.08),
+          bottomLeft: Offset(0.08, 0.9),
+          bottomRight: Offset(0.92, 0.92),
+        ),
       );
 
       final cropRectForEditor = service.cropRectForCropEditor(rotated);
@@ -91,8 +98,8 @@ void main() {
       final decoded = img.decodeJpg(processed.bytes)!;
       final pixel = decoded.getPixel(0, 0);
 
-      expect(processed.width, 2);
-      expect(processed.height, 2);
+      expect(processed.width, 1);
+      expect(processed.height, 4);
       expect(pixel.r, pixel.g);
       expect(pixel.g, pixel.b);
     });
@@ -132,19 +139,50 @@ void main() {
       );
     });
 
-    test('auto crop detects a centered document', () async {
+    test(
+      'auto detection finds perspective corners on a skewed document',
+      () async {
+        final draft = await service.createDraft(
+          id: 'page-1',
+          sourceName: 'capture.png',
+          originalBytes: _encodePerspectiveDocumentImage(),
+        );
+
+        final detected = await service.suggestAutoDetection(draft);
+        final corners = detected.documentCornersNormalized;
+
+        expect(corners, isNotNull);
+        expect(
+          detected.cropRectNormalized,
+          ScanImageProcessingService.fullCropRect,
+        );
+        expect(corners!.topLeft.dx, closeTo(0.22, 0.08));
+        expect(corners.topLeft.dy, closeTo(0.15, 0.08));
+        expect(corners.topRight.dx, closeTo(0.82, 0.08));
+        expect(corners.topRight.dy, closeTo(0.11, 0.08));
+        expect(corners.bottomLeft.dx, closeTo(0.15, 0.08));
+        expect(corners.bottomLeft.dy, closeTo(0.84, 0.08));
+        expect(corners.bottomRight.dx, closeTo(0.87, 0.08));
+        expect(corners.bottomRight.dy, closeTo(0.90, 0.08));
+      },
+    );
+
+    test('preview applies perspective correction before export', () async {
       final draft = await service.createDraft(
         id: 'page-1',
         sourceName: 'capture.png',
-        originalBytes: _encodeBorderedDocumentImage(),
+        originalBytes: _encodePerspectiveDocumentImage(),
+      );
+      final detected = await service.suggestAutoDetection(draft);
+
+      final processed = await service.buildPreviewPage(
+        draft.copyWith(
+          documentCornersNormalized: detected.documentCornersNormalized,
+        ),
       );
 
-      final cropRect = await service.suggestAutoCropRect(draft);
-
-      expect(cropRect.left, closeTo(0.16, 0.05));
-      expect(cropRect.top, closeTo(0.12, 0.05));
-      expect(cropRect.right, closeTo(0.84, 0.05));
-      expect(cropRect.bottom, closeTo(0.88, 0.05));
+      expect(processed.width, greaterThan(180));
+      expect(processed.height, greaterThan(260));
     });
   });
 
@@ -178,6 +216,7 @@ ScannedPageDraft _page({required String id}) {
     id: id,
     sourceName: '$id.png',
     originalBytes: _encodeTestImage(10, 10),
+    documentCornersNormalized: null,
     cropRectNormalized: const Rect.fromLTWH(0, 0, 1, 1),
     rotationQuarterTurns: 0,
     brightness: 0,
@@ -216,17 +255,19 @@ Uint8List _encodeGradientImage(int width, int height) {
   return Uint8List.fromList(img.encodePng(image));
 }
 
-Uint8List _encodeBorderedDocumentImage() {
+Uint8List _encodePerspectiveDocumentImage() {
   const width = 400;
   const height = 520;
   final image = img.Image(width: width, height: height);
   img.fill(image, color: img.ColorRgb8(242, 242, 242));
-  img.fillRect(
+  img.fillPolygon(
     image,
-    x1: 68,
-    y1: 54,
-    x2: 332,
-    y2: 462,
+    vertices: <img.Point>[
+      img.Point(92, 78),
+      img.Point(330, 54),
+      img.Point(352, 468),
+      img.Point(60, 438),
+    ],
     color: img.ColorRgb8(32, 32, 32),
   );
   return Uint8List.fromList(img.encodePng(image));

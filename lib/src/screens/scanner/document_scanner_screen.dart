@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:crop_your_image/crop_your_image.dart';
 import 'package:flutter/material.dart';
@@ -38,6 +39,8 @@ class DocumentScannerScreen extends StatefulWidget {
   State<DocumentScannerScreen> createState() => _DocumentScannerScreenState();
 }
 
+enum _ScanCropEditMode { rectangle, corners }
+
 class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
   final ScanImportService _importService = const ScanImportService();
   final ScanImageProcessingService _imageProcessingService =
@@ -50,11 +53,14 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
   ScanDraftDocument _draft = ScanDraftDocument.empty;
   Future<ProcessedScanPage>? _previewFuture;
   Future<ProcessedScanPage>? _cropEditorFuture;
+  Future<ProcessedScanPage>? _cornerEditorFuture;
   bool _isImporting = false;
   bool _isSaving = false;
   bool _isAutoCropping = false;
   bool _isCropping = false;
+  _ScanCropEditMode _cropEditMode = _ScanCropEditMode.rectangle;
   Rect? _pendingCropRectNormalized;
+  ScanDocumentCorners? _pendingDocumentCornersNormalized;
   int _pageCounter = 0;
 
   @override
@@ -143,7 +149,9 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
     setState(() {
       _draft = _draft.addPages(pages);
       _isCropping = false;
+      _cropEditMode = _ScanCropEditMode.rectangle;
       _pendingCropRectNormalized = null;
+      _pendingDocumentCornersNormalized = null;
       _syncPreviewFutures();
     });
   }
@@ -156,13 +164,18 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
     _cropEditorFuture = !_isCropping || selectedPage == null
         ? null
         : _imageProcessingService.buildCropEditorPage(selectedPage);
+    _cornerEditorFuture = !_isCropping || selectedPage == null
+        ? null
+        : _imageProcessingService.buildCornerEditorPage(selectedPage);
   }
 
   void _selectPage(String pageId) {
     setState(() {
       _draft = _draft.copyWith(selectedPageId: pageId);
       _isCropping = false;
+      _cropEditMode = _ScanCropEditMode.rectangle;
       _pendingCropRectNormalized = null;
+      _pendingDocumentCornersNormalized = null;
       _syncPreviewFutures();
     });
   }
@@ -186,7 +199,9 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
     setState(() {
       _draft = _draft.removePage(selectedPage.id);
       _isCropping = false;
+      _cropEditMode = _ScanCropEditMode.rectangle;
       _pendingCropRectNormalized = null;
+      _pendingDocumentCornersNormalized = null;
       _syncPreviewFutures();
     });
   }
@@ -201,10 +216,16 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
         (selectedPage.rotationQuarterTurns + deltaQuarterTurns) % 4;
     setState(() {
       _draft = _draft.replacePage(
-        selectedPage.copyWith(rotationQuarterTurns: nextRotation),
+        selectedPage.copyWith(
+          rotationQuarterTurns: nextRotation,
+          cropRectNormalized: ScanImageProcessingService.fullCropRect,
+          clearDocumentCorners: true,
+        ),
       );
       _isCropping = false;
+      _cropEditMode = _ScanCropEditMode.rectangle;
       _pendingCropRectNormalized = null;
+      _pendingDocumentCornersNormalized = null;
       _syncPreviewFutures();
     });
   }
@@ -223,6 +244,15 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
     });
   }
 
+  ScanDocumentCorners _defaultDocumentCorners() {
+    return const ScanDocumentCorners(
+      topLeft: Offset(0.12, 0.12),
+      topRight: Offset(0.88, 0.12),
+      bottomLeft: Offset(0.12, 0.88),
+      bottomRight: Offset(0.88, 0.88),
+    );
+  }
+
   void _toggleCropMode() {
     final selectedPage = _selectedPage;
     if (selectedPage == null) {
@@ -232,28 +262,64 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
     setState(() {
       if (_isCropping) {
         _isCropping = false;
+        _cropEditMode = _ScanCropEditMode.rectangle;
         _pendingCropRectNormalized = null;
+        _pendingDocumentCornersNormalized = null;
       } else {
         _isCropping = true;
+        _cropEditMode = selectedPage.documentCornersNormalized != null
+            ? _ScanCropEditMode.corners
+            : _ScanCropEditMode.rectangle;
         _pendingCropRectNormalized = selectedPage.cropRectNormalized;
+        _pendingDocumentCornersNormalized =
+            selectedPage.documentCornersNormalized ?? _defaultDocumentCorners();
       }
       _syncPreviewFutures();
     });
   }
 
-  void _applyCrop() {
+  void _setCropEditMode(_ScanCropEditMode cropEditMode) {
     final selectedPage = _selectedPage;
-    final pendingCropRectNormalized = _pendingCropRectNormalized;
-    if (selectedPage == null || pendingCropRectNormalized == null) {
+    if (selectedPage == null) {
       return;
     }
 
     setState(() {
-      _draft = _draft.replacePage(
-        selectedPage.copyWith(cropRectNormalized: pendingCropRectNormalized),
-      );
+      _cropEditMode = cropEditMode;
+      _pendingCropRectNormalized ??= selectedPage.cropRectNormalized;
+      _pendingDocumentCornersNormalized ??=
+          selectedPage.documentCornersNormalized ?? _defaultDocumentCorners();
+    });
+  }
+
+  void _applyCrop() {
+    final selectedPage = _selectedPage;
+    if (selectedPage == null) {
+      return;
+    }
+
+    setState(() {
+      if (_cropEditMode == _ScanCropEditMode.corners) {
+        _draft = _draft.replacePage(
+          selectedPage.copyWith(
+            documentCornersNormalized:
+                _pendingDocumentCornersNormalized ?? _defaultDocumentCorners(),
+          ),
+        );
+      } else {
+        final pendingCropRectNormalized = _pendingCropRectNormalized;
+        if (pendingCropRectNormalized != null) {
+          _draft = _draft.replacePage(
+            selectedPage.copyWith(
+              cropRectNormalized: pendingCropRectNormalized,
+            ),
+          );
+        }
+      }
       _isCropping = false;
+      _cropEditMode = _ScanCropEditMode.rectangle;
       _pendingCropRectNormalized = null;
+      _pendingDocumentCornersNormalized = null;
       _syncPreviewFutures();
     });
   }
@@ -266,18 +332,42 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
 
     setState(() => _isAutoCropping = true);
     try {
-      final cropRect = await _imageProcessingService.suggestAutoCropRect(
-        selectedPage,
-      );
+      final detectedDocument = await _imageProcessingService
+          .suggestAutoDetection(selectedPage);
       if (!mounted) {
+        return;
+      }
+
+      if (detectedDocument.documentCornersNormalized == null &&
+          detectedDocument.cropRectNormalized ==
+              ScanImageProcessingService.fullCropRect) {
+        _showMessage(AppStrings.scannerAutoCropFailed);
         return;
       }
 
       setState(() {
         _draft = _draft.replacePage(
-          selectedPage.copyWith(cropRectNormalized: cropRect),
+          selectedPage.copyWith(
+            cropRectNormalized:
+                detectedDocument.documentCornersNormalized == null
+                ? detectedDocument.cropRectNormalized
+                : ScanImageProcessingService.fullCropRect,
+            documentCornersNormalized:
+                detectedDocument.documentCornersNormalized,
+            clearDocumentCorners:
+                detectedDocument.documentCornersNormalized == null,
+          ),
         );
-        _pendingCropRectNormalized = cropRect;
+        _cropEditMode = detectedDocument.documentCornersNormalized == null
+            ? _ScanCropEditMode.rectangle
+            : _ScanCropEditMode.corners;
+        _pendingCropRectNormalized =
+            detectedDocument.documentCornersNormalized == null
+            ? detectedDocument.cropRectNormalized
+            : ScanImageProcessingService.fullCropRect;
+        _pendingDocumentCornersNormalized =
+            detectedDocument.documentCornersNormalized ??
+            _defaultDocumentCorners();
         _syncPreviewFutures();
       });
     } catch (_) {
@@ -301,10 +391,87 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
       _draft = _draft.replacePage(
         selectedPage.copyWith(
           cropRectNormalized: ScanImageProcessingService.fullCropRect,
+          clearDocumentCorners: true,
         ),
       );
+      _cropEditMode = _ScanCropEditMode.rectangle;
       _pendingCropRectNormalized = ScanImageProcessingService.fullCropRect;
+      _pendingDocumentCornersNormalized = _defaultDocumentCorners();
       _syncPreviewFutures();
+    });
+  }
+
+  void _updatePendingDocumentCorner(
+    _ScanCornerHandle cornerHandle,
+    Offset normalizedPoint,
+  ) {
+    final currentCorners =
+        _pendingDocumentCornersNormalized ??
+        _selectedPage?.documentCornersNormalized;
+    if (currentCorners == null) {
+      return;
+    }
+
+    const minGap = 0.04;
+    var nextPoint = Offset(
+      normalizedPoint.dx.clamp(0.0, 1.0).toDouble(),
+      normalizedPoint.dy.clamp(0.0, 1.0).toDouble(),
+    );
+
+    switch (cornerHandle) {
+      case _ScanCornerHandle.topLeft:
+        nextPoint = Offset(
+          nextPoint.dx
+              .clamp(0.0, currentCorners.topRight.dx - minGap)
+              .toDouble(),
+          nextPoint.dy
+              .clamp(0.0, currentCorners.bottomLeft.dy - minGap)
+              .toDouble(),
+        );
+      case _ScanCornerHandle.topRight:
+        nextPoint = Offset(
+          nextPoint.dx
+              .clamp(currentCorners.topLeft.dx + minGap, 1.0)
+              .toDouble(),
+          nextPoint.dy
+              .clamp(0.0, currentCorners.bottomRight.dy - minGap)
+              .toDouble(),
+        );
+      case _ScanCornerHandle.bottomLeft:
+        nextPoint = Offset(
+          nextPoint.dx
+              .clamp(0.0, currentCorners.bottomRight.dx - minGap)
+              .toDouble(),
+          nextPoint.dy
+              .clamp(currentCorners.topLeft.dy + minGap, 1.0)
+              .toDouble(),
+        );
+      case _ScanCornerHandle.bottomRight:
+        nextPoint = Offset(
+          nextPoint.dx
+              .clamp(currentCorners.bottomLeft.dx + minGap, 1.0)
+              .toDouble(),
+          nextPoint.dy
+              .clamp(currentCorners.topRight.dy + minGap, 1.0)
+              .toDouble(),
+        );
+    }
+
+    setState(() {
+      _pendingDocumentCornersNormalized = switch (cornerHandle) {
+        _ScanCornerHandle.topLeft => currentCorners.copyWith(
+          topLeft: nextPoint,
+        ),
+        _ScanCornerHandle.topRight => currentCorners.copyWith(
+          topRight: nextPoint,
+        ),
+        _ScanCornerHandle.bottomLeft => currentCorners.copyWith(
+          bottomLeft: nextPoint,
+        ),
+        _ScanCornerHandle.bottomRight => currentCorners.copyWith(
+          bottomRight: nextPoint,
+        ),
+      };
     });
   }
 
@@ -514,7 +681,9 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
             : AnimatedSwitcher(
                 duration: const Duration(milliseconds: 180),
                 child: _isCropping
-                    ? _buildCropPreview(theme, selectedPage)
+                    ? (_cropEditMode == _ScanCropEditMode.corners
+                          ? _buildCornerPreview(theme, selectedPage)
+                          : _buildRectCropPreview(theme, selectedPage))
                     : _buildProcessedPreview(theme),
               ),
       ),
@@ -557,7 +726,7 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
     );
   }
 
-  Widget _buildCropPreview(ThemeData theme, ScannedPageDraft selectedPage) {
+  Widget _buildRectCropPreview(ThemeData theme, ScannedPageDraft selectedPage) {
     final cropEditorFuture = _cropEditorFuture;
     if (cropEditorFuture == null) {
       return const SizedBox.expand();
@@ -593,7 +762,7 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
           padding: const EdgeInsets.all(12),
           child: Crop(
             key: ValueKey(
-              '${selectedPage.id}-${selectedPage.rotationQuarterTurns}-${selectedPage.cropRectNormalized}',
+              '${selectedPage.id}-${selectedPage.rotationQuarterTurns}-${selectedPage.cropRectNormalized}-${selectedPage.documentCornersNormalized?.ordered.join('|')}',
             ),
             image: cropEditorPage.bytes,
             controller: _cropController,
@@ -616,6 +785,50 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
                     ),
                   );
             },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCornerPreview(ThemeData theme, ScannedPageDraft selectedPage) {
+    final cornerEditorFuture = _cornerEditorFuture;
+    if (cornerEditorFuture == null) {
+      return const SizedBox.expand();
+    }
+
+    return FutureBuilder<ProcessedScanPage>(
+      future: cornerEditorFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError || !snapshot.hasData) {
+          return Center(
+            child: Text(
+              AppStrings.scannerPreviewFailed,
+              style: theme.textTheme.bodyMedium,
+            ),
+          );
+        }
+
+        final cornerEditorPage = snapshot.data!;
+        final documentCorners =
+            _pendingDocumentCornersNormalized ??
+            selectedPage.documentCornersNormalized ??
+            _defaultDocumentCorners();
+
+        return Padding(
+          padding: const EdgeInsets.all(12),
+          child: _CornerCropEditor(
+            key: ValueKey(
+              '${selectedPage.id}-${selectedPage.rotationQuarterTurns}-${selectedPage.documentCornersNormalized?.ordered.join('|')}',
+            ),
+            imageBytes: cornerEditorPage.bytes,
+            imageWidth: cornerEditorPage.width,
+            imageHeight: cornerEditorPage.height,
+            documentCorners: documentCorners,
+            onCornerChanged: _updatePendingDocumentCorner,
           ),
         );
       },
@@ -694,14 +907,14 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(14),
           child: _isCropping
-              ? _buildCropInspector(theme)
+              ? _buildCropInspector(theme, selectedPage)
               : _buildAdjustmentsInspector(theme, selectedPage),
         ),
       ),
     );
   }
 
-  Widget _buildCropInspector(ThemeData theme) {
+  Widget _buildCropInspector(ThemeData theme, ScannedPageDraft? selectedPage) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -713,10 +926,33 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          AppStrings.scanCropBody,
+          _cropEditMode == _ScanCropEditMode.corners
+              ? AppStrings.scanCornerCropBody
+              : AppStrings.scanCropBody,
           style: theme.textTheme.bodyMedium?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
           ),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: <Widget>[
+            ChoiceChip(
+              label: const Text(AppStrings.scanRectCropMode),
+              selected: _cropEditMode == _ScanCropEditMode.rectangle,
+              onSelected: selectedPage == null
+                  ? null
+                  : (_) => _setCropEditMode(_ScanCropEditMode.rectangle),
+            ),
+            ChoiceChip(
+              label: const Text(AppStrings.scanCornerCropMode),
+              selected: _cropEditMode == _ScanCropEditMode.corners,
+              onSelected: selectedPage == null
+                  ? null
+                  : (_) => _setCropEditMode(_ScanCropEditMode.corners),
+            ),
+          ],
         ),
         const SizedBox(height: 16),
         OverflowBar(
@@ -773,6 +1009,23 @@ class _DocumentScannerScreenState extends State<DocumentScannerScreen> {
             fontWeight: FontWeight.w800,
           ),
         ),
+        if (selectedPage?.documentCornersNormalized != null) ...<Widget>[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              AppStrings.scanPerspectiveCorrectionActive,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.onPrimaryContainer,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
         const SizedBox(height: 12),
         _LabeledValueSlider(
           label: AppStrings.scanBrightness,
@@ -961,5 +1214,241 @@ class _LabeledValueSlider extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+enum _ScanCornerHandle { topLeft, topRight, bottomLeft, bottomRight }
+
+class _CornerCropEditor extends StatelessWidget {
+  const _CornerCropEditor({
+    super.key,
+    required this.imageBytes,
+    required this.imageWidth,
+    required this.imageHeight,
+    required this.documentCorners,
+    required this.onCornerChanged,
+  });
+
+  final Uint8List imageBytes;
+  final int imageWidth;
+  final int imageHeight;
+  final ScanDocumentCorners documentCorners;
+  final void Function(_ScanCornerHandle handle, Offset point) onCornerChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final viewportRect = _fitRect(
+          Size(constraints.maxWidth, constraints.maxHeight),
+          Size(imageWidth.toDouble(), imageHeight.toDouble()),
+        );
+        final points = <_ScanCornerHandle, Offset>{
+          _ScanCornerHandle.topLeft: _normalizedToViewport(
+            documentCorners.topLeft,
+            viewportRect,
+          ),
+          _ScanCornerHandle.topRight: _normalizedToViewport(
+            documentCorners.topRight,
+            viewportRect,
+          ),
+          _ScanCornerHandle.bottomLeft: _normalizedToViewport(
+            documentCorners.bottomLeft,
+            viewportRect,
+          ),
+          _ScanCornerHandle.bottomRight: _normalizedToViewport(
+            documentCorners.bottomRight,
+            viewportRect,
+          ),
+        };
+
+        return Stack(
+          children: <Widget>[
+            Positioned.fromRect(
+              rect: viewportRect,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: Image.memory(
+                  imageBytes,
+                  fit: BoxFit.fill,
+                  gaplessPlayback: true,
+                ),
+              ),
+            ),
+            Positioned.fill(
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: _CornerCropOverlayPainter(
+                    viewportRect: viewportRect,
+                    corners: points,
+                    colorScheme: Theme.of(context).colorScheme,
+                  ),
+                ),
+              ),
+            ),
+            ...points.entries.map(
+              (entry) => Positioned(
+                left: entry.value.dx - 18,
+                top: entry.value.dy - 18,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onPanUpdate: (details) {
+                    final nextViewportPoint = Offset(
+                      (entry.value.dx + details.delta.dx)
+                          .clamp(viewportRect.left, viewportRect.right)
+                          .toDouble(),
+                      (entry.value.dy + details.delta.dy)
+                          .clamp(viewportRect.top, viewportRect.bottom)
+                          .toDouble(),
+                    );
+                    onCornerChanged(
+                      entry.key,
+                      _viewportToNormalized(nextViewportPoint, viewportRect),
+                    );
+                  },
+                  child: _CornerHandleChip(label: _labelForHandle(entry.key)),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  static Rect _fitRect(Size box, Size image) {
+    if (box.width <= 0 ||
+        box.height <= 0 ||
+        image.width <= 0 ||
+        image.height <= 0) {
+      return Rect.zero;
+    }
+
+    final imageAspectRatio = image.width / image.height;
+    final boxAspectRatio = box.width / box.height;
+    if (imageAspectRatio > boxAspectRatio) {
+      final fittedHeight = box.width / imageAspectRatio;
+      final top = (box.height - fittedHeight) / 2;
+      return Rect.fromLTWH(0, top, box.width, fittedHeight);
+    }
+
+    final fittedWidth = box.height * imageAspectRatio;
+    final left = (box.width - fittedWidth) / 2;
+    return Rect.fromLTWH(left, 0, fittedWidth, box.height);
+  }
+
+  static Offset _normalizedToViewport(Offset point, Rect viewportRect) {
+    return Offset(
+      viewportRect.left + (point.dx * viewportRect.width),
+      viewportRect.top + (point.dy * viewportRect.height),
+    );
+  }
+
+  static Offset _viewportToNormalized(Offset point, Rect viewportRect) {
+    return Offset(
+      ((point.dx - viewportRect.left) / viewportRect.width)
+          .clamp(0.0, 1.0)
+          .toDouble(),
+      ((point.dy - viewportRect.top) / viewportRect.height)
+          .clamp(0.0, 1.0)
+          .toDouble(),
+    );
+  }
+
+  static String _labelForHandle(_ScanCornerHandle handle) {
+    return switch (handle) {
+      _ScanCornerHandle.topLeft => '1',
+      _ScanCornerHandle.topRight => '2',
+      _ScanCornerHandle.bottomRight => '3',
+      _ScanCornerHandle.bottomLeft => '4',
+    };
+  }
+}
+
+class _CornerHandleChip extends StatelessWidget {
+  const _CornerHandleChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: colorScheme.primary,
+        shape: BoxShape.circle,
+        border: Border.all(color: colorScheme.onPrimary, width: 2),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 8,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+          color: colorScheme.onPrimary,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _CornerCropOverlayPainter extends CustomPainter {
+  const _CornerCropOverlayPainter({
+    required this.viewportRect,
+    required this.corners,
+    required this.colorScheme,
+  });
+
+  final Rect viewportRect;
+  final Map<_ScanCornerHandle, Offset> corners;
+  final ColorScheme colorScheme;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final polygon = <Offset>[
+      corners[_ScanCornerHandle.topLeft]!,
+      corners[_ScanCornerHandle.topRight]!,
+      corners[_ScanCornerHandle.bottomRight]!,
+      corners[_ScanCornerHandle.bottomLeft]!,
+    ];
+
+    final dimPaint = Paint()..color = colorScheme.scrim.withValues(alpha: 0.28);
+    final clearPath = Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+    final polygonPath = Path()..addPolygon(polygon, true);
+    final overlayPath = Path.combine(
+      PathOperation.difference,
+      clearPath,
+      polygonPath,
+    );
+    canvas.drawPath(overlayPath, dimPaint);
+
+    final edgePaint = Paint()
+      ..color = colorScheme.primary
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3;
+    canvas.drawPath(polygonPath, edgePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _CornerCropOverlayPainter oldDelegate) {
+    return viewportRect != oldDelegate.viewportRect ||
+        corners[_ScanCornerHandle.topLeft] !=
+            oldDelegate.corners[_ScanCornerHandle.topLeft] ||
+        corners[_ScanCornerHandle.topRight] !=
+            oldDelegate.corners[_ScanCornerHandle.topRight] ||
+        corners[_ScanCornerHandle.bottomLeft] !=
+            oldDelegate.corners[_ScanCornerHandle.bottomLeft] ||
+        corners[_ScanCornerHandle.bottomRight] !=
+            oldDelegate.corners[_ScanCornerHandle.bottomRight] ||
+        colorScheme != oldDelegate.colorScheme;
   }
 }

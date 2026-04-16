@@ -19,6 +19,16 @@ class ProcessedScanPage {
   final int height;
 }
 
+class AutoDetectedDocument {
+  const AutoDetectedDocument({
+    required this.cropRectNormalized,
+    required this.documentCornersNormalized,
+  });
+
+  final Rect cropRectNormalized;
+  final ScanDocumentCorners? documentCornersNormalized;
+}
+
 class ScanImageProcessingService {
   const ScanImageProcessingService();
 
@@ -46,6 +56,7 @@ class ScanImageProcessingService {
       id: response['id']! as String,
       sourceName: response['sourceName']! as String,
       originalBytes: originalBytes,
+      documentCornersNormalized: null,
       cropRectNormalized: fullCropRect,
       rotationQuarterTurns: 0,
       brightness: 0,
@@ -63,6 +74,7 @@ class ScanImageProcessingService {
       jpegQuality: 84,
       includeCrop: true,
       includeRotation: true,
+      includePerspectiveCorrection: true,
       includeAdjustments: true,
     );
   }
@@ -74,6 +86,19 @@ class ScanImageProcessingService {
       jpegQuality: 88,
       includeCrop: false,
       includeRotation: true,
+      includePerspectiveCorrection: true,
+      includeAdjustments: false,
+    );
+  }
+
+  Future<ProcessedScanPage> buildCornerEditorPage(ScannedPageDraft page) async {
+    return _processPage(
+      page,
+      maxLongEdgePx: cropEditorLongEdgePx,
+      jpegQuality: 88,
+      includeCrop: false,
+      includeRotation: true,
+      includePerspectiveCorrection: false,
       includeAdjustments: false,
     );
   }
@@ -88,43 +113,40 @@ class ScanImageProcessingService {
       jpegQuality: quality.jpegQuality,
       includeCrop: true,
       includeRotation: true,
+      includePerspectiveCorrection: true,
       includeAdjustments: true,
     );
   }
 
-  Future<Rect> suggestAutoCropRect(ScannedPageDraft page) async {
-    final response = await Isolate.run<List<double>>(
-      () => _suggestAutoCropOnWorker(<String, Object?>{
+  Future<AutoDetectedDocument> suggestAutoDetection(
+    ScannedPageDraft page,
+  ) async {
+    final response = await Isolate.run<Map<String, Object?>>(
+      () => _suggestAutoDetectionOnWorker(<String, Object?>{
         ..._serializePage(page),
         'maxLongEdgePx': autoCropLongEdgePx,
       }),
     );
-    return _rectFromList(response);
+
+    return AutoDetectedDocument(
+      cropRectNormalized: _rectFromList(
+        response['cropRectNormalized']! as List<Object?>,
+      ),
+      documentCornersNormalized: _cornersFromMessage(
+        response['documentCornersNormalized'],
+      ),
+    );
   }
 
   Rect cropRectForCropEditor(ScannedPageDraft page) {
-    return _clampNormalizedRect(
-      _mapOriginalRectToRotatedRect(
-        page.cropRectNormalized,
-        width: page.width,
-        height: page.height,
-        quarterTurns: page.rotationQuarterTurns,
-      ),
-    );
+    return _clampNormalizedRect(page.cropRectNormalized);
   }
 
   Rect cropRectFromCropEditor({
     required ScannedPageDraft page,
     required Rect rotatedCropRectNormalized,
   }) {
-    return _clampNormalizedRect(
-      _mapRotatedRectToOriginalRect(
-        rotatedCropRectNormalized,
-        width: page.width,
-        height: page.height,
-        quarterTurns: page.rotationQuarterTurns,
-      ),
-    );
+    return _clampNormalizedRect(rotatedCropRectNormalized);
   }
 
   Future<ProcessedScanPage> _processPage(
@@ -133,6 +155,7 @@ class ScanImageProcessingService {
     required int jpegQuality,
     required bool includeCrop,
     required bool includeRotation,
+    required bool includePerspectiveCorrection,
     required bool includeAdjustments,
   }) async {
     final response = await Isolate.run<Map<String, Object?>>(
@@ -142,6 +165,7 @@ class ScanImageProcessingService {
         'jpegQuality': jpegQuality,
         'includeCrop': includeCrop,
         'includeRotation': includeRotation,
+        'includePerspectiveCorrection': includePerspectiveCorrection,
         'includeAdjustments': includeAdjustments,
       }),
     );
@@ -156,6 +180,16 @@ class ScanImageProcessingService {
   }
 }
 
+class _AutoDetectionWorkerResult {
+  const _AutoDetectionWorkerResult({
+    required this.cropRectNormalized,
+    required this.documentCornersNormalized,
+  });
+
+  final Rect cropRectNormalized;
+  final ScanDocumentCorners? documentCornersNormalized;
+}
+
 Map<String, Object?> _serializePage(ScannedPageDraft page) {
   return <String, Object?>{
     'id': page.id,
@@ -163,6 +197,9 @@ Map<String, Object?> _serializePage(ScannedPageDraft page) {
     'originalBytes': TransferableTypedData.fromList(<Uint8List>[
       page.originalBytes,
     ]),
+    'documentCornersNormalized': page.documentCornersNormalized == null
+        ? null
+        : _cornersToList(page.documentCornersNormalized!),
     'cropRectNormalized': _rectToList(page.cropRectNormalized),
     'rotationQuarterTurns': page.rotationQuarterTurns,
     'brightness': page.brightness,
@@ -194,16 +231,25 @@ Map<String, Object?> _processPageOnWorker(Map<String, Object?> request) {
   }
 
   img.Image processedImage = img.Image.from(decodedImage);
-  if (request['includeCrop']! as bool) {
-    processedImage = _applyCrop(
-      processedImage,
-      _rectFromList(request['cropRectNormalized']! as List<Object?>),
-    );
-  }
   if (request['includeRotation']! as bool) {
     processedImage = _applyRotation(
       processedImage,
       request['rotationQuarterTurns']! as int,
+    );
+  }
+  if (request['includePerspectiveCorrection']! as bool) {
+    final rawCorners = request['documentCornersNormalized'];
+    if (rawCorners != null) {
+      processedImage = _applyPerspectiveCorrection(
+        processedImage,
+        _cornersFromList(rawCorners as List<Object?>),
+      );
+    }
+  }
+  if (request['includeCrop']! as bool) {
+    processedImage = _applyCrop(
+      processedImage,
+      _rectFromList(request['cropRectNormalized']! as List<Object?>),
     );
   }
   if (request['includeAdjustments']! as bool) {
@@ -230,7 +276,9 @@ Map<String, Object?> _processPageOnWorker(Map<String, Object?> request) {
   };
 }
 
-List<double> _suggestAutoCropOnWorker(Map<String, Object?> request) {
+Map<String, Object?> _suggestAutoDetectionOnWorker(
+  Map<String, Object?> request,
+) {
   final decodedImage = img.decodeImage(_bytesFromMessage(request));
   if (decodedImage == null) {
     throw const FormatException('Image non lisible');
@@ -245,11 +293,24 @@ List<double> _suggestAutoCropOnWorker(Map<String, Object?> request) {
     request['maxLongEdgePx']! as int,
   );
 
-  final grayscaleImage = img.grayscale(rotatedImage);
+  final detection = _detectDocument(rotatedImage);
+  return <String, Object?>{
+    'cropRectNormalized': _rectToList(detection.cropRectNormalized),
+    'documentCornersNormalized': detection.documentCornersNormalized == null
+        ? null
+        : _cornersToList(detection.documentCornersNormalized!),
+  };
+}
+
+_AutoDetectionWorkerResult _detectDocument(img.Image rotatedImage) {
+  final grayscaleImage = img.grayscale(img.Image.from(rotatedImage));
   final width = grayscaleImage.width;
   final height = grayscaleImage.height;
-  if (width < 20 || height < 20) {
-    return _rectToList(ScanImageProcessingService.fullCropRect);
+  if (width < 24 || height < 24) {
+    return const _AutoDetectionWorkerResult(
+      cropRectNormalized: ScanImageProcessingService.fullCropRect,
+      documentCornersNormalized: null,
+    );
   }
 
   final borderThickness = math.max(8, math.min(width, height) ~/ 28);
@@ -267,6 +328,7 @@ List<double> _suggestAutoCropOnWorker(Map<String, Object?> request) {
       if (!isBorder) {
         continue;
       }
+
       final luminance = grayscaleImage.getPixel(x, y).r.toDouble();
       borderSum += luminance;
       borderSumSquares += luminance * luminance;
@@ -275,7 +337,10 @@ List<double> _suggestAutoCropOnWorker(Map<String, Object?> request) {
   }
 
   if (borderCount == 0) {
-    return _rectToList(ScanImageProcessingService.fullCropRect);
+    return const _AutoDetectionWorkerResult(
+      cropRectNormalized: ScanImageProcessingService.fullCropRect,
+      documentCornersNormalized: null,
+    );
   }
 
   final borderAverage = borderSum / borderCount;
@@ -288,6 +353,16 @@ List<double> _suggestAutoCropOnWorker(Map<String, Object?> request) {
   var minY = height;
   var maxX = -1;
   var maxY = -1;
+  var candidateCount = 0;
+
+  Offset? topLeft;
+  Offset? topRight;
+  Offset? bottomLeft;
+  Offset? bottomRight;
+  var topLeftScore = double.infinity;
+  var topRightScore = double.negativeInfinity;
+  var bottomLeftScore = double.negativeInfinity;
+  var bottomRightScore = double.negativeInfinity;
 
   for (var y = borderThickness; y < height - borderThickness; y += 1) {
     for (var x = borderThickness; x < width - borderThickness; x += 1) {
@@ -296,6 +371,7 @@ List<double> _suggestAutoCropOnWorker(Map<String, Object?> request) {
         continue;
       }
 
+      candidateCount += 1;
       if (x < minX) {
         minX = x;
       }
@@ -308,44 +384,82 @@ List<double> _suggestAutoCropOnWorker(Map<String, Object?> request) {
       if (y > maxY) {
         maxY = y;
       }
+
+      final point = Offset(x.toDouble(), y.toDouble());
+      final sumScore = point.dx + point.dy;
+      final rightScore = point.dx - point.dy;
+      final leftScore = point.dy - point.dx;
+
+      if (sumScore < topLeftScore) {
+        topLeftScore = sumScore;
+        topLeft = point;
+      }
+      if (rightScore > topRightScore) {
+        topRightScore = rightScore;
+        topRight = point;
+      }
+      if (leftScore > bottomLeftScore) {
+        bottomLeftScore = leftScore;
+        bottomLeft = point;
+      }
+      if (sumScore > bottomRightScore) {
+        bottomRightScore = sumScore;
+        bottomRight = point;
+      }
     }
   }
 
-  if (maxX < minX || maxY < minY) {
-    return _rectToList(ScanImageProcessingService.fullCropRect);
+  if (maxX < minX || maxY < minY || candidateCount == 0) {
+    return const _AutoDetectionWorkerResult(
+      cropRectNormalized: ScanImageProcessingService.fullCropRect,
+      documentCornersNormalized: null,
+    );
   }
+
+  final fallbackCropRect = _expandedBoundingRect(
+    minX: minX,
+    minY: minY,
+    maxX: maxX,
+    maxY: maxY,
+    width: width,
+    height: height,
+    borderThickness: borderThickness,
+  );
 
   final detectedWidth = maxX - minX + 1;
   final detectedHeight = maxY - minY + 1;
-  if (detectedWidth < width * 0.28 || detectedHeight < height * 0.28) {
-    return _rectToList(ScanImageProcessingService.fullCropRect);
+  final coverage = candidateCount / (width * height);
+  if (detectedWidth < width * 0.28 ||
+      detectedHeight < height * 0.28 ||
+      coverage < 0.08) {
+    return _AutoDetectionWorkerResult(
+      cropRectNormalized: fallbackCropRect,
+      documentCornersNormalized: null,
+    );
   }
 
-  final margin = math.max(6, borderThickness ~/ 2);
-  final expandedRect = Rect.fromLTRB(
-    (minX - margin).clamp(0, width - 1).toDouble(),
-    (minY - margin).clamp(0, height - 1).toDouble(),
-    (maxX + margin + 1).clamp(1, width).toDouble(),
-    (maxY + margin + 1).clamp(1, height).toDouble(),
-  );
-
-  final rotatedCropRectNormalized = Rect.fromLTRB(
-    expandedRect.left / width,
-    expandedRect.top / height,
-    expandedRect.right / width,
-    expandedRect.bottom / height,
-  );
-
-  final cropRect = _clampNormalizedRect(
-    _mapRotatedRectToOriginalRect(
-      rotatedCropRectNormalized,
-      width: request['width']! as int,
-      height: request['height']! as int,
-      quarterTurns: request['rotationQuarterTurns']! as int,
+  final corners = _expandDetectedCorners(
+    ScanDocumentCorners(
+      topLeft: topLeft!,
+      topRight: topRight!,
+      bottomLeft: bottomLeft!,
+      bottomRight: bottomRight!,
     ),
+    width: width,
+    height: height,
   );
 
-  return _rectToList(cropRect);
+  if (!_isValidDocumentCorners(corners, width: width, height: height)) {
+    return _AutoDetectionWorkerResult(
+      cropRectNormalized: fallbackCropRect,
+      documentCornersNormalized: null,
+    );
+  }
+
+  return _AutoDetectionWorkerResult(
+    cropRectNormalized: ScanImageProcessingService.fullCropRect,
+    documentCornersNormalized: _normalizeCorners(corners, width, height),
+  );
 }
 
 Uint8List _bytesFromMessage(Map<String, Object?> request) {
@@ -390,6 +504,53 @@ img.Image _applyRotation(img.Image source, int rotationQuarterTurns) {
   return img.copyRotate(source, angle: normalizedTurns * 90);
 }
 
+img.Image _applyPerspectiveCorrection(
+  img.Image source,
+  ScanDocumentCorners documentCornersNormalized,
+) {
+  final topLeft = _pixelPointFromNormalized(
+    documentCornersNormalized.topLeft,
+    width: source.width,
+    height: source.height,
+  );
+  final topRight = _pixelPointFromNormalized(
+    documentCornersNormalized.topRight,
+    width: source.width,
+    height: source.height,
+  );
+  final bottomLeft = _pixelPointFromNormalized(
+    documentCornersNormalized.bottomLeft,
+    width: source.width,
+    height: source.height,
+  );
+  final bottomRight = _pixelPointFromNormalized(
+    documentCornersNormalized.bottomRight,
+    width: source.width,
+    height: source.height,
+  );
+
+  final targetWidth = math.max(
+    1,
+    ((_distance(topLeft, topRight) + _distance(bottomLeft, bottomRight)) / 2)
+        .round(),
+  );
+  final targetHeight = math.max(
+    1,
+    ((_distance(topLeft, bottomLeft) + _distance(topRight, bottomRight)) / 2)
+        .round(),
+  );
+
+  return img.copyRectify(
+    source,
+    topLeft: img.Point(topLeft.dx, topLeft.dy),
+    topRight: img.Point(topRight.dx, topRight.dy),
+    bottomLeft: img.Point(bottomLeft.dx, bottomLeft.dy),
+    bottomRight: img.Point(bottomRight.dx, bottomRight.dy),
+    interpolation: img.Interpolation.linear,
+    toImage: img.Image(width: targetWidth, height: targetHeight),
+  );
+}
+
 img.Image _applyAdjustments(
   img.Image source, {
   required double brightness,
@@ -426,6 +587,151 @@ img.Image _resizeToLongEdge(img.Image source, int maxLongEdgePx) {
   return img.copyResize(source, height: maxLongEdgePx);
 }
 
+Rect _expandedBoundingRect({
+  required int minX,
+  required int minY,
+  required int maxX,
+  required int maxY,
+  required int width,
+  required int height,
+  required int borderThickness,
+}) {
+  final margin = math.max(6, borderThickness ~/ 2);
+  final expandedRect = Rect.fromLTRB(
+    (minX - margin).clamp(0, width - 1).toDouble(),
+    (minY - margin).clamp(0, height - 1).toDouble(),
+    (maxX + margin + 1).clamp(1, width).toDouble(),
+    (maxY + margin + 1).clamp(1, height).toDouble(),
+  );
+
+  return Rect.fromLTRB(
+    expandedRect.left / width,
+    expandedRect.top / height,
+    expandedRect.right / width,
+    expandedRect.bottom / height,
+  );
+}
+
+ScanDocumentCorners _expandDetectedCorners(
+  ScanDocumentCorners corners, {
+  required int width,
+  required int height,
+}) {
+  final center = Offset(
+    (corners.topLeft.dx +
+            corners.topRight.dx +
+            corners.bottomLeft.dx +
+            corners.bottomRight.dx) /
+        4,
+    (corners.topLeft.dy +
+            corners.topRight.dy +
+            corners.bottomLeft.dy +
+            corners.bottomRight.dy) /
+        4,
+  );
+
+  Offset expand(Offset point) {
+    final dx = point.dx - center.dx;
+    final dy = point.dy - center.dy;
+    return Offset(
+      (point.dx + dx * 0.04).clamp(0, width - 1).toDouble(),
+      (point.dy + dy * 0.04).clamp(0, height - 1).toDouble(),
+    );
+  }
+
+  return ScanDocumentCorners(
+    topLeft: expand(corners.topLeft),
+    topRight: expand(corners.topRight),
+    bottomLeft: expand(corners.bottomLeft),
+    bottomRight: expand(corners.bottomRight),
+  );
+}
+
+bool _isValidDocumentCorners(
+  ScanDocumentCorners corners, {
+  required int width,
+  required int height,
+}) {
+  final polygon = <Offset>[
+    corners.topLeft,
+    corners.topRight,
+    corners.bottomRight,
+    corners.bottomLeft,
+  ];
+  final area = _polygonArea(polygon);
+  final minArea = width * height * 0.12;
+  if (area < minArea) {
+    return false;
+  }
+
+  final topWidth = _distance(corners.topLeft, corners.topRight);
+  final bottomWidth = _distance(corners.bottomLeft, corners.bottomRight);
+  final leftHeight = _distance(corners.topLeft, corners.bottomLeft);
+  final rightHeight = _distance(corners.topRight, corners.bottomRight);
+  if (topWidth < width * 0.25 ||
+      bottomWidth < width * 0.25 ||
+      leftHeight < height * 0.25 ||
+      rightHeight < height * 0.25) {
+    return false;
+  }
+
+  if (corners.topLeft.dy > corners.bottomLeft.dy ||
+      corners.topRight.dy > corners.bottomRight.dy ||
+      corners.topLeft.dx > corners.topRight.dx ||
+      corners.bottomLeft.dx > corners.bottomRight.dx) {
+    return false;
+  }
+
+  return true;
+}
+
+double _polygonArea(List<Offset> points) {
+  var sum = 0.0;
+  for (var index = 0; index < points.length; index += 1) {
+    final current = points[index];
+    final next = points[(index + 1) % points.length];
+    sum += (current.dx * next.dy) - (next.dx * current.dy);
+  }
+  return sum.abs() / 2;
+}
+
+ScanDocumentCorners _normalizeCorners(
+  ScanDocumentCorners corners,
+  int width,
+  int height,
+) {
+  Offset normalize(Offset point) {
+    return Offset(
+      (point.dx / width).clamp(0.0, 1.0).toDouble(),
+      (point.dy / height).clamp(0.0, 1.0).toDouble(),
+    );
+  }
+
+  return ScanDocumentCorners(
+    topLeft: normalize(corners.topLeft),
+    topRight: normalize(corners.topRight),
+    bottomLeft: normalize(corners.bottomLeft),
+    bottomRight: normalize(corners.bottomRight),
+  );
+}
+
+Offset _pixelPointFromNormalized(
+  Offset point, {
+  required int width,
+  required int height,
+}) {
+  return Offset(
+    (point.dx * (width - 1)).clamp(0, width - 1).toDouble(),
+    (point.dy * (height - 1)).clamp(0, height - 1).toDouble(),
+  );
+}
+
+double _distance(Offset first, Offset second) {
+  final dx = second.dx - first.dx;
+  final dy = second.dy - first.dy;
+  return math.sqrt((dx * dx) + (dy * dy));
+}
+
 Rect _clampNormalizedRect(Rect rect) {
   final left = rect.left.clamp(0.0, 1.0).toDouble();
   final top = rect.top.clamp(0.0, 1.0).toDouble();
@@ -434,113 +740,45 @@ Rect _clampNormalizedRect(Rect rect) {
   return Rect.fromLTRB(left, top, right, bottom);
 }
 
-Rect _mapOriginalRectToRotatedRect(
-  Rect originalRect, {
-  required int width,
-  required int height,
-  required int quarterTurns,
-}) {
-  final rectPx = Rect.fromLTWH(
-    originalRect.left * width,
-    originalRect.top * height,
-    originalRect.width * width,
-    originalRect.height * height,
-  );
-  final transformed = _transformRect(
-    rectPx,
-    (point) => _transformOriginalPointToRotated(
-      point,
-      width: width,
-      height: height,
-      quarterTurns: quarterTurns,
+ScanDocumentCorners? _cornersFromMessage(Object? rawCorners) {
+  if (rawCorners == null) {
+    return null;
+  }
+  return _cornersFromList(rawCorners as List<Object?>);
+}
+
+ScanDocumentCorners _cornersFromList(List<Object?> values) {
+  return ScanDocumentCorners(
+    topLeft: Offset(
+      (values[0]! as num).toDouble(),
+      (values[1]! as num).toDouble(),
+    ),
+    topRight: Offset(
+      (values[2]! as num).toDouble(),
+      (values[3]! as num).toDouble(),
+    ),
+    bottomLeft: Offset(
+      (values[4]! as num).toDouble(),
+      (values[5]! as num).toDouble(),
+    ),
+    bottomRight: Offset(
+      (values[6]! as num).toDouble(),
+      (values[7]! as num).toDouble(),
     ),
   );
-  final rotatedSize = _rotatedSize(width, height, quarterTurns);
-  return Rect.fromLTWH(
-    transformed.left / rotatedSize.width,
-    transformed.top / rotatedSize.height,
-    transformed.width / rotatedSize.width,
-    transformed.height / rotatedSize.height,
-  );
 }
 
-Rect _mapRotatedRectToOriginalRect(
-  Rect rotatedRect, {
-  required int width,
-  required int height,
-  required int quarterTurns,
-}) {
-  final rotatedSize = _rotatedSize(width, height, quarterTurns);
-  final rectPx = Rect.fromLTWH(
-    rotatedRect.left * rotatedSize.width,
-    rotatedRect.top * rotatedSize.height,
-    rotatedRect.width * rotatedSize.width,
-    rotatedRect.height * rotatedSize.height,
-  );
-  final transformed = _transformRect(
-    rectPx,
-    (point) => _transformRotatedPointToOriginal(
-      point,
-      width: width,
-      height: height,
-      quarterTurns: quarterTurns,
-    ),
-  );
-  return Rect.fromLTWH(
-    transformed.left / width,
-    transformed.top / height,
-    transformed.width / width,
-    transformed.height / height,
-  );
-}
-
-Rect _transformRect(Rect rect, Offset Function(Offset point) transform) {
-  final points = <Offset>[
-    rect.topLeft,
-    rect.topRight,
-    rect.bottomLeft,
-    rect.bottomRight,
-  ].map(transform).toList(growable: false);
-  final left = points.map((point) => point.dx).reduce(math.min);
-  final top = points.map((point) => point.dy).reduce(math.min);
-  final right = points.map((point) => point.dx).reduce(math.max);
-  final bottom = points.map((point) => point.dy).reduce(math.max);
-  return Rect.fromLTRB(left, top, right, bottom);
-}
-
-Size _rotatedSize(int width, int height, int quarterTurns) {
-  return switch (quarterTurns % 4) {
-    1 || 3 => Size(height.toDouble(), width.toDouble()),
-    _ => Size(width.toDouble(), height.toDouble()),
-  };
-}
-
-Offset _transformOriginalPointToRotated(
-  Offset point, {
-  required int width,
-  required int height,
-  required int quarterTurns,
-}) {
-  return switch (quarterTurns % 4) {
-    1 => Offset(height - point.dy, point.dx),
-    2 => Offset(width - point.dx, height - point.dy),
-    3 => Offset(point.dy, width - point.dx),
-    _ => point,
-  };
-}
-
-Offset _transformRotatedPointToOriginal(
-  Offset point, {
-  required int width,
-  required int height,
-  required int quarterTurns,
-}) {
-  return switch (quarterTurns % 4) {
-    1 => Offset(point.dy, height - point.dx),
-    2 => Offset(width - point.dx, height - point.dy),
-    3 => Offset(width - point.dy, point.dx),
-    _ => point,
-  };
+List<double> _cornersToList(ScanDocumentCorners corners) {
+  return <double>[
+    corners.topLeft.dx,
+    corners.topLeft.dy,
+    corners.topRight.dx,
+    corners.topRight.dy,
+    corners.bottomLeft.dx,
+    corners.bottomLeft.dy,
+    corners.bottomRight.dx,
+    corners.bottomRight.dy,
+  ];
 }
 
 Rect _rectFromList(List<Object?> values) {
