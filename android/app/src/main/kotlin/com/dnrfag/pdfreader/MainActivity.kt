@@ -21,6 +21,7 @@ class MainActivity : FlutterActivity() {
     private var documentChannel: MethodChannel? = null
     private var pendingOpenedDocumentPayload: Map<String, Any?>? = null
     private var pendingSaveCopySourcePath: String? = null
+    private var pendingSaveCopyDisplayName: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -155,19 +156,22 @@ class MainActivity : FlutterActivity() {
         }
 
         val sourceFile = File(sourceLocalPath).canonicalFile
-        val allowedDirectory = File(filesDir, "pdf_documents").canonicalFile
-        val allowedPrefix = "${allowedDirectory.path}${File.separator}"
+        val allowedPdfDirectory = File(filesDir, "pdf_documents").canonicalFile
+        val allowedCacheDirectory = cacheDir.canonicalFile
         if (!sourceFile.exists()) {
             result.error("missing_file", "Le PDF exporte n'existe plus.", null)
             return
         }
-        if (!sourceFile.path.startsWith(allowedPrefix)) {
-            result.error("invalid_source", "Le PDF exporte n'est pas dans le repertoire autorise.", null)
+        if (!isPathWithin(sourceFile, allowedPdfDirectory) &&
+            !isPathWithin(sourceFile, allowedCacheDirectory)
+        ) {
+            result.error("invalid_source", "Le PDF exporte n'est pas dans un repertoire interne autorise.", null)
             return
         }
 
         pendingSaveCopyResult = result
         pendingSaveCopySourcePath = sourceFile.path
+        pendingSaveCopyDisplayName = displayName
         val intent =
             Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
@@ -225,7 +229,9 @@ class MainActivity : FlutterActivity() {
         val result = pendingSaveCopyResult ?: return
         pendingSaveCopyResult = null
         val sourceLocalPath = pendingSaveCopySourcePath
+        val fallbackDisplayName = pendingSaveCopyDisplayName
         pendingSaveCopySourcePath = null
+        pendingSaveCopyDisplayName = null
 
         if (resultCode != RESULT_OK || sourceLocalPath.isNullOrBlank()) {
             result.success(null)
@@ -247,7 +253,7 @@ class MainActivity : FlutterActivity() {
                 contentResolver.takePersistableUriPermission(uri, grantedFlags)
             }
             copyLocalPdfToUri(sourceLocalPath, uri)
-            buildPreparedDocumentPayload(uri)
+            buildPreparedDocumentPayload(uri, fallbackDisplayName)
         }.onSuccess { payload ->
             result.success(payload)
         }.onFailure { error ->
@@ -372,8 +378,11 @@ class MainActivity : FlutterActivity() {
         } ?: throw FileNotFoundException("Impossible d'ouvrir la destination PDF.")
     }
 
-    private fun buildPreparedDocumentPayload(uri: Uri): Map<String, Any?>? {
-        val metadata = resolveMetadata(uri) ?: return null
+    private fun buildPreparedDocumentPayload(
+        uri: Uri,
+        fallbackDisplayName: String? = null,
+    ): Map<String, Any?>? {
+        val metadata = resolveMetadata(uri, fallbackDisplayName) ?: return null
         val localPath = copyToLocalStorage(uri) ?: return null
 
         return hashMapOf(
@@ -384,37 +393,42 @@ class MainActivity : FlutterActivity() {
         )
     }
 
-    private fun resolveMetadata(uri: Uri): DocumentMetadata? {
-        contentResolver.openInputStream(uri)?.use { inputStream ->
-            if (inputStream.available() < 0) {
-                return null
-            }
-        } ?: return null
-
+    private fun resolveMetadata(
+        uri: Uri,
+        fallbackDisplayName: String? = null,
+    ): DocumentMetadata? {
         var displayName: String? = null
         var sizeBytes: Long? = null
 
-        contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
-            null,
-            null,
-            null,
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) {
-                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                if (nameIndex >= 0) {
-                    displayName = cursor.getString(nameIndex)
-                }
-                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
-                    sizeBytes = cursor.getLong(sizeIndex)
+        runCatching {
+            contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (nameIndex >= 0) {
+                        displayName = cursor.getString(nameIndex)
+                    }
+                    if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
+                        sizeBytes = cursor.getLong(sizeIndex)
+                    }
                 }
             }
         }
 
         return DocumentMetadata(
-            displayName = displayName?.takeIf { it.isNotBlank() } ?: "Document PDF",
+            displayName =
+                displayName?.takeIf { it.isNotBlank() }
+                    ?: fallbackDisplayName?.takeIf { it.isNotBlank() }
+                    ?: uri.lastPathSegment
+                        ?.substringAfterLast('/')
+                        ?.takeIf { it.isNotBlank() }
+                    ?: "Document PDF",
             sizeBytes = sizeBytes,
         )
     }
@@ -442,6 +456,14 @@ class MainActivity : FlutterActivity() {
                 append("%02x".format(byte))
             }
         }
+    }
+
+    private fun isPathWithin(file: File, directory: File): Boolean {
+        if (!directory.exists()) {
+            return false
+        }
+        val directoryPath = directory.path
+        return file.path == directoryPath || file.path.startsWith("$directoryPath${File.separator}")
     }
 
     private data class DocumentMetadata(

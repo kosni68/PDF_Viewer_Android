@@ -67,14 +67,25 @@ class ScannedPdfExportService {
       pages: pages,
       exportQuality: exportQuality,
     );
-    final temporaryDirectory = await getTemporaryDirectory();
+    final workingDirectory = await _getWorkingDirectory();
     final safeStem = fileNameStem.trim().isEmpty ? 'scan' : fileNameStem.trim();
     final outputPath = p.join(
-      temporaryDirectory.path,
+      workingDirectory.path,
       '$safeStem-${DateTime.now().millisecondsSinceEpoch}.pdf',
     );
     final outputFile = File(outputPath);
     await outputFile.writeAsBytes(bytes, flush: true);
     return outputFile.path;
+  }
+
+  Future<Directory> _getWorkingDirectory() async {
+    final applicationSupportDirectory = await getApplicationSupportDirectory();
+    final workingDirectory = Directory(
+      p.join(applicationSupportDirectory.path, 'pdf_documents'),
+    );
+    if (!await workingDirectory.exists()) {
+      await workingDirectory.create(recursive: true);
+    }
+    return workingDirectory;
   }
 }
